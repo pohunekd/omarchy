@@ -39,13 +39,13 @@ describe('facts', () => {
 	test('finds the date of the published version, not just the newest heading', () => {
 		const log = '# Changelog\n\n## 0.4.0 - 2026-12-01\n\n## 0.3.0 - 2026-11-10\n';
 		expect(releaseDate(log, '0.3.0')).toBe('2026-11-10');
-		expect(releaseDate(log, '0.30')).toBeNull();
+		expect(releaseDate('## 0x3x0 - 2026-11-10\n', '0.3.0')).toBeNull();
 		expect(releaseDate('# Changelog', '0.3.0')).toBeNull();
 	});
 	test('takes the published release, and refuses to guess without one', () => {
 		expect(versionOfTag('v1.2.3')).toBe('1.2.3');
 		for (const bad of ['1.2.3', 'v1.2', 'v1.2.3-rc1', '', null]) expect(() => versionOfTag(bad)).toThrow();
-		expect(() => readFacts(undefined)).toThrow('SITE_RELEASE_VERSION');
+		expect(() => readFacts('')).toThrow('SITE_RELEASE_VERSION');
 		expect(readFacts('0.3.0').version).toBe('0.3.0');
 		expect(readFacts('99.0.0').released).toBeNull();
 		expect(readFacts('0.3.0').released).toBe('2026-11-10');
