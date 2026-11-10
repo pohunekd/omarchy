@@ -1,4 +1,6 @@
 # Files that stay out of the release archive (git archive honours export-ignore).
+# The marketplace listing files (README.md, LICENSE, manifest.json, preview.png) stay in;
+# tests/manifest_check.py fails when one of them is ignored here.
 .github/ export-ignore
 .agents/ export-ignore
 .claude/ export-ignore

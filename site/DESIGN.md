@@ -82,6 +82,19 @@ repository's own (`docs/`, synthetic sessions from `tools/demo-pohunek`),
 copied into `src/generated/` by `scripts/sync-assets.ts`. No third-party
 request is made at runtime; `scripts/check-dist.ts` fails the build otherwise.
 
+## Link preview and marketplace hero
+
+`social/social.html` (1200x630, `public/social.png`) and `social/preview.html`
+(1600x808, the repository's root `preview.png` for the Omarchy marketplace)
+are rendered from the same tokens and theme variables as the page (gruvbox, to
+sit next to the warm screenshots) by `bun run render-social` with
+`CHROME_BIN` pointing at headless Chrome or Chromium. Their only screenshots
+are `docs/list.png` and `docs/bar.png`, taken against `tools/demo-pohunek`.
+`Base.astro` emits the Open Graph and Twitter tags with absolute URLs, and
+`scripts/check-dist.ts` fails the build when a tag or the image is missing.
+Re-render and commit both PNGs when the artwork, a theme or those screenshots
+change.
+
 ## Trademark
 
 "for Omarchy" is used nominatively. No Omarchy or Basecamp logo or wordmark

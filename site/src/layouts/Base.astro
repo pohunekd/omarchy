@@ -8,13 +8,25 @@ import '../styles/tokens.css';
 import '../styles/site.css';
 import icon from '../generated/pohunek-app.png';
 import { THEMES, themeCss } from '../config/themes';
-import { THEME_STORAGE_KEY } from '../config/site';
+import { SITE_NAME, SOCIAL_IMAGE, THEME_STORAGE_KEY } from '../config/site';
+import { socialTags } from '../lib/social';
 
 interface Props {
 	title: string;
 	description: string;
 }
 const { title, description } = Astro.props;
+const pageUrl = new URL(Astro.url.pathname, Astro.site).href;
+const social = socialTags({
+	title,
+	description,
+	url: pageUrl,
+	image: new URL(SOCIAL_IMAGE.path, Astro.site).href,
+	imageAlt: SOCIAL_IMAGE.alt,
+	imageWidth: SOCIAL_IMAGE.width,
+	imageHeight: SOCIAL_IMAGE.height,
+	siteName: SITE_NAME,
+});
 const prepaint = `(function(){var d=document.documentElement;d.classList.add('js');try{var t=localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)});if(${JSON.stringify(THEMES.map((t) => t.id))}.indexOf(t)>-1)d.setAttribute('data-theme',t)}catch(e){}})();`;
 ---
 <!doctype html>
@@ -26,7 +38,8 @@ const prepaint = `(function(){var d=document.documentElement;d.classList.add('js
 		<meta name="description" content={description} />
 		<meta name="color-scheme" content="dark light" />
 		<link rel="icon" type="image/png" href={icon.src} />
-		<link rel="canonical" href={new URL(Astro.url.pathname, Astro.site).href} />
+		<link rel="canonical" href={pageUrl} />
+		{social.map((t) => <meta {...{ [t.attr]: t.key }} content={t.content} />)}
 		<style is:inline set:html={themeCss()}></style>
 		<script is:inline set:html={prepaint}></script>
 	</head>

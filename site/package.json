@@ -9,6 +9,7 @@
     "build": "bun scripts/sync-assets.ts && astro build && bun scripts/check-dist.ts",
     "preview": "astro preview",
     "astro": "astro",
+    "render-social": "bun scripts/render-social.ts",
     "test": "bun test tests"
   },
   "dependencies": {

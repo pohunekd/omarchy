@@ -29,6 +29,38 @@ That is the whole install. No pohunek on the machine yet? The panel offers
 **Install pohunek**: it fetches the latest release, verifies it, shows what
 will be written where, and asks once.
 
+## Requirements
+
+| Needs | For | Notes |
+|---|---|---|
+| [Omarchy](https://omarchy.org) with the Quattro shell | the plugin host | Quickshell is part of the Omarchy shell; the plugin ships no copy of it |
+| `python3` | `fetch.py`, the session snapshot | standard library only, nothing to `pip install` |
+| the [`pohunek`](https://pohunek.dev) CLI and its daemon | every session, on this machine and on any host you follow | the widget is a client and owns no session state; **Install pohunek** in the panel (or `tools/install-pohunek`) installs it with a checksum and attestation check |
+
+Optional, each used by one feature only: `gh` (verifies the build attestation
+while installing pohunek), `herdr` (the machine list behind **Install there**
+and `tools/distribute`), NetBird or Tailscale (hosts on other machines), `gum`
+(prompts in the tools). Nothing else is downloaded at runtime.
+
+## Remove
+
+```bash
+omarchy plugin remove pohunek.sessions
+```
+
+This disables the widget and deletes the plugin folder (it asks first; add
+`--yes` to skip the question). The plugin never changes anything outside that
+folder, apart from the one state file below. The tools write elsewhere only when
+you run them, and their changes are undone by hand:
+
+| Written by | Where | Undo |
+|---|---|---|
+| the widget itself (view, collapsed sections, your groups, recent projects) | `~/.local/state/omarchy/pohunek-layout.json`; `omarchy plugin remove` leaves it behind | delete the file |
+| **Add these shortcuts to Hyprland** / `tools/add-shortcuts` | `~/.config/hypr/bindings.lua` (a `.bak.<time>` copy is kept) | delete the `-- pohunek` comment and the two `o.bind` lines after it |
+| **Set up network** / `tools/setup-network` | `~/.config/pohunek/overlays.toml`; the NetBird or Tailscale client (AUR `netbird-bin` with a system service, or Omarchy's tailscale service); a joined overlay network | restore your overlay choice; leave the network with `netbird down` or `sudo tailscale down`; remove the client with your package manager or `omarchy` if you do not use it otherwise |
+| **Roll out** / `tools/distribute` | on each target machine over SSH: this plugin, pohunek, and `overlays.toml` | remove them there the same way |
+| **Install pohunek** / `tools/install-pohunek` | the pohunek daemon and CLI (a user service); only when you answer yes, pohunek's agent hooks in `~/.claude` and `~/.codex` | pohunek is a separate program: remove it and its hooks as [pohunek.dev](https://pohunek.dev) describes (`pohunek integration --help` and `pohunek integration doctor` show what is installed) |
+
 ---
 
 ## Why

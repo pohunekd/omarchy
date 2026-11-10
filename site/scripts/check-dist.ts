@@ -2,6 +2,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SOCIAL_IMAGE } from '../src/config/site';
+import { socialProblems } from '../src/lib/social';
 import { cssExternal, externalRequests, hasLang, imagesWithoutAlt, scriptNetworkUse } from '../src/lib/dist-check';
 
 const dist = fileURLToPath(new URL('../dist/', import.meta.url));
@@ -14,6 +16,7 @@ function walk(dir: string): string[] {
 	});
 }
 
+const ORIGIN = 'https://omarchy.pohunek.dev';
 const problems: string[] = [];
 const files = walk(dist);
 for (const f of files) {
@@ -23,11 +26,25 @@ for (const f of files) {
 		for (const r of externalRequests(html)) problems.push(`${rel}: external request ${r}`);
 		for (const i of imagesWithoutAlt(html)) problems.push(`${rel}: image without alt ${i}`);
 		if (!hasLang(html)) problems.push(`${rel}: <html> has no lang`);
+		for (const p of socialProblems(html, ORIGIN)) problems.push(`${rel}: ${p}`);
 	} else if (f.endsWith('.css')) {
 		for (const r of cssExternal(readFileSync(f, 'utf8'))) problems.push(`${rel}: ${r}`);
 	} else if (f.endsWith('.js')) {
 		for (const r of scriptNetworkUse(readFileSync(f, 'utf8'))) problems.push(`${rel}: script uses ${r}`);
 	}
+}
+
+// The link preview image the meta tags point at.
+const socialFile = join(dist, SOCIAL_IMAGE.path);
+if (!existsSync(socialFile)) {
+	problems.push(`${SOCIAL_IMAGE.path}: missing from dist`);
+} else {
+	const png = readFileSync(socialFile);
+	const isPng = png.subarray(1, 4).toString('latin1') === 'PNG';
+	const [w, h] = isPng ? [png.readUInt32BE(16), png.readUInt32BE(20)] : [0, 0];
+	if (!isPng) problems.push(`${SOCIAL_IMAGE.path}: not a PNG`);
+	else if (w !== SOCIAL_IMAGE.width || h !== SOCIAL_IMAGE.height) problems.push(`${SOCIAL_IMAGE.path}: ${w}x${h}, expected ${SOCIAL_IMAGE.width}x${SOCIAL_IMAGE.height}`);
+	if (png.length > SOCIAL_IMAGE.maxBytes) problems.push(`${SOCIAL_IMAGE.path}: ${png.length} bytes exceeds ${SOCIAL_IMAGE.maxBytes}`);
 }
 
 // Content that must be readable without running any script.
