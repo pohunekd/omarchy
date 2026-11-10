@@ -7,6 +7,7 @@ usage: python3 -I tests/manifest_check.py [plugin-folder]   (default: repository
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -144,14 +145,18 @@ def check_listing(folder):
             fail(f"{name} is {path.stat().st_size} bytes, over the {PREVIEW_MAX_BYTES} byte budget")
         if name.endswith(".png") and not path.read_bytes().startswith(PNG_SIGNATURE):
             fail(f"{name} is not a PNG")
-    attributes = folder / ".gitattributes"
-    if attributes.is_file():
-        for line in attributes.read_text(encoding="utf-8").splitlines():
-            fields = line.split()
-            if fields and not fields[0].startswith("#") and "export-ignore" in fields[1:]:
-                pattern = fields[0].lstrip("/")
-                if any(Path(name).match(pattern.rstrip("/")) for name in previews + ["README.md", "LICENSE", "manifest.json"]):
-                    fail(f".gitattributes export-ignores a listing file: {fields[0]}")
+    # `git check-attr` applies .gitattributes exactly as `git archive` does.
+    if (folder / ".git").exists():
+        names = ["README.md", "LICENSE", "manifest.json"] + previews
+        result = subprocess.run(
+            ["git", "-C", str(folder), "check-attr", "export-ignore", "--"] + names,
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            fail(f"git check-attr failed: {result.stderr.strip()}")
+        for line in result.stdout.splitlines():
+            if line.endswith(": export-ignore: set"):
+                fail(f".gitattributes export-ignores a listing file: {line.split(':')[0]}")
     return len(previews)
 
 

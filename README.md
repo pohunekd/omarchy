@@ -49,14 +49,15 @@ omarchy plugin remove pohunek.sessions
 ```
 
 This disables the widget and deletes the plugin folder (it asks first; add
-`--yes` to skip the question). The plugin never changes
-anything outside that folder on its own; the tools below do so only when you run
-them, and are undone by hand:
+`--yes` to skip the question). The plugin never changes anything outside that
+folder on its own. The tools do, only when you run them, and their changes are
+undone by hand:
 
 | Written by | Where | Undo |
 |---|---|---|
-| **Add these shortcuts to Hyprland** / `tools/add-shortcuts` | `~/.config/hypr/bindings.lua` (a `.bak.<time>` copy is kept) | delete the two `pohunek` lines |
-| **Set up network** / `tools/setup-network` | `~/.config/pohunek/overlays.toml` | restore your previous overlay choice |
+| **Add these shortcuts to Hyprland** / `tools/add-shortcuts` | `~/.config/hypr/bindings.lua` (a `.bak.<time>` copy is kept) | delete the `-- pohunek` comment and the two `o.bind` lines after it |
+| **Set up network** / `tools/setup-network` | `~/.config/pohunek/overlays.toml`; the NetBird or Tailscale client (AUR `netbird-bin` with a system service, or Omarchy's tailscale service); a joined overlay network | restore your overlay choice; leave the network with `netbird down` or `sudo tailscale down`; remove the client with your package manager or `omarchy` if you do not use it otherwise |
+| **Roll out** / `tools/distribute` | on each target machine over SSH: this plugin, pohunek, and `overlays.toml` | remove them there the same way |
 | **Install pohunek** / `tools/install-pohunek` | the pohunek daemon and CLI (a user service) | pohunek is a separate program; see [pohunek.dev](https://pohunek.dev) to remove it |
 
 ---
