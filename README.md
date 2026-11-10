@@ -216,7 +216,11 @@ omarchy bar set pohunek.sessions command ~/.config/omarchy/plugins/pohunek.sessi
 node tests/model.test.js       # every decision: owner states, groups, filters, fuzzy search
 python3 tests/qml_check.py     # loads the real widget offscreen in Quickshell, 39 checks
 omarchy restart shell          # pick up QML changes
+scripts/gates                  # every check CI runs, one exit code per gate
 ```
+
+Contributors and agents start at [AGENTS.md](AGENTS.md); releases are described
+in [docs/releasing.md](docs/releasing.md).
 
 | File | Role |
 |---|---|

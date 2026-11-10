@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.3.0
+User-facing changes of pohunek for Omarchy. Each version section is folded from
+the fragments in `changelog.d/` when its release is prepared. Sections that
+predate the fragment process carry no issue links.
+
+## 0.3.0 - 2026-11-10
+
+### Added
 
 - First public release as `pohunekd/omarchy`.
 - Sessions of every host (this machine, herdr machines, NetBird / Tailscale peers), Needs you first.

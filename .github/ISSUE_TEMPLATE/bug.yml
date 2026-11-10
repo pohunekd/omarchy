@@ -1,0 +1,59 @@
+name: Bug
+description: Observed behaviour differs from what is expected
+type: Bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: "One or two sentences: what is wrong and where."
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Widget commit SHA or manifest version, Pohunek version (`pohunek --version`), Omarchy version, Quickshell version.
+      placeholder: |
+        - omarchy widget: <sha>
+        - pohunek: 0.x.y
+        - Omarchy: 3.x, Quickshell 0.x
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands and actions from a clean start, so another agent can reproduce it without asking. Include the config used (with no secrets).
+      placeholder: |
+        1. `pohunek session new ...`
+        2. open the panel from the bar
+        3. click ... and see ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What happens instead, with the exact error text.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Log lines, screenshots, CI run links. Mark anything you inferred but did not observe as unconfirmed.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Found while
+      description: The issue or PR you were working on, if any, and whether this blocks it.
+      placeholder: Found while working on #N; not blocking.
