@@ -27,24 +27,24 @@ run_gate() {
 
 # The gate functions are exported and run through `bash -c` by run_gate, so
 # the linter finds no direct call.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 gate_model() {
   node tests/model.test.js
 }
 
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 gate_fetch() {
   python3 -m py_compile fetch.py tools/demo-pohunek
   python3 -I fetch.py --bin "$PWD/tools/demo-pohunek" --discover --machines > "$scratch/snapshot.json"
   node tests/model.test.js "$scratch/snapshot.json"
 }
 
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 gate_manifest() {
   python3 -I tests/manifest_check.py
 }
 
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 gate_symlinks() {
   local link
   link="$(find . -name .git -prune -o -type l -print -quit)"
@@ -55,7 +55,7 @@ gate_symlinks() {
 }
 
 # Bash scripts under tools/ and scripts/, found by shebang.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 shell_files() {
   local f
   for f in tools/* scripts/*; do
@@ -65,7 +65,7 @@ shell_files() {
   done
 }
 
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 gate_shell() {
   local tools=() own=() f
   while IFS= read -r f; do
@@ -82,12 +82,12 @@ gate_shell() {
   shellcheck "${own[@]}"
 }
 
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 gate_changelog() {
   scripts/changelog check
 }
 
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 gate_changelog_tests() {
   python3 -I tests/changelog_test.py
 }
