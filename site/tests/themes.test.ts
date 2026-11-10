@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
 import { contrast } from '../src/lib/color';
 import {
@@ -5,11 +6,21 @@ import {
 } from '../src/config/themes';
 
 // The pohunek parchment layer is constant across themes (pohunek.dev tokens.css, light values).
-const PAPER = {
-	paper: '#fcf9f2', raised: '#f6f3ec', sunk: '#f0eee7',
-	ink: '#1c1c18', inkMuted: '#4d453f', leather: '#775935', amberInk: '#8f5400',
+const css = readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8');
+const token = (name: string): string => {
+	const m = new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`).exec(css);
+	if (!m) throw new Error(`token --${name} not found in tokens.css`);
+	return m[1];
 };
-const CRT = { bg: '#1b1a17', ink: '#e9e4d8', muted: '#9b9282', phosphor: '#7dda91', amber: AMBER };
+const PAPER = {
+	paper: token('paper'), raised: token('paper-raised'), sunk: token('paper-sunk'),
+	ink: token('ink'), inkMuted: token('ink-muted'), leather: token('leather'),
+	leatherStrong: token('leather-strong'), amberInk: token('amber-ink'),
+};
+const CRT = {
+	bg: token('crt-bezel'), screen: token('crt-screen'), ink: token('crt-ink'), muted: token('crt-muted'),
+	phosphor: token('phosphor'), amber: token('amber'),
+};
 
 describe('every shipped theme meets WCAG AA', () => {
 	for (const t of THEMES) {
@@ -42,12 +53,14 @@ describe('the constant pohunek layers meet WCAG AA', () => {
 			expect(contrast(PAPER.ink, bg)).toBeGreaterThanOrEqual(AA_TEXT);
 			expect(contrast(PAPER.inkMuted, bg)).toBeGreaterThanOrEqual(AA_TEXT);
 			expect(contrast(PAPER.leather, bg)).toBeGreaterThanOrEqual(AA_TEXT);
+			expect(contrast(PAPER.leatherStrong, bg)).toBeGreaterThanOrEqual(AA_TEXT);
 			expect(contrast(PAPER.amberInk, bg)).toBeGreaterThanOrEqual(AA_TEXT);
 		}
 	});
 	test('phosphor, amber and chalk on the CRT void', () => {
 		for (const c of [CRT.ink, CRT.muted, CRT.phosphor, CRT.amber]) {
 			expect(contrast(c, CRT.bg)).toBeGreaterThanOrEqual(AA_TEXT);
+			expect(contrast(c, CRT.screen)).toBeGreaterThanOrEqual(AA_TEXT);
 		}
 	});
 });

@@ -29,7 +29,7 @@ export function contrast(a: string, b: string): number {
 	return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
 
-/** Linear sRGB-space-free mix: `t` of `to` blended into `from`. */
+/** Blends `t` of `to` into `from` per channel in gamma-encoded sRGB. */
 export function mix(from: string, to: string, t: number): string {
 	const a = parseHex(from);
 	const b = parseHex(to);

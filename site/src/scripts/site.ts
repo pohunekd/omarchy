@@ -3,7 +3,7 @@
  * theme picker, the workspace indicator, the clock, copy buttons, focus-follows-
  * pointer and the scroll reveal.
  */
-import { COPIED_RESET_MS, THEME_STORAGE_KEY, WORKSPACE_MARGIN } from '../config/site';
+import { CLOCK_TICK_MS, COPIED_RESET_MS, REVEAL_MARGIN, THEME_STORAGE_KEY, WORKSPACE_MARGIN } from '../config/site';
 import { DEFAULT_DARK, DEFAULT_LIGHT, THEMES } from '../config/themes';
 
 const root = document.documentElement;
@@ -92,7 +92,7 @@ function initClock(): void {
 	};
 	el.hidden = false;
 	tick();
-	setInterval(tick, 15000);
+	setInterval(tick, CLOCK_TICK_MS);
 }
 
 function initCopy(): void {
@@ -100,6 +100,7 @@ function initCopy(): void {
 		const source = btn.parentElement?.querySelector<HTMLElement>('[data-copy-source]');
 		if (!source || !navigator.clipboard) continue;
 		btn.hidden = false;
+		const label = btn.getAttribute('aria-label') ?? 'Copy';
 		btn.addEventListener('click', async () => {
 			try {
 				await navigator.clipboard.writeText(source.textContent ?? '');
@@ -107,7 +108,11 @@ function initCopy(): void {
 			} catch {
 				btn.textContent = 'failed';
 			}
-			setTimeout(() => (btn.textContent = 'copy'), COPIED_RESET_MS);
+			btn.setAttribute('aria-label', btn.textContent === 'copied' ? 'Copied' : 'Copy failed');
+			setTimeout(() => {
+				btn.textContent = 'copy';
+				btn.setAttribute('aria-label', label);
+			}, COPIED_RESET_MS);
 		});
 	}
 }
@@ -136,7 +141,7 @@ function initReveal(): void {
 				io.unobserve(e.target);
 			}
 		},
-		{ rootMargin: '0px 0px -8% 0px' },
+		{ rootMargin: REVEAL_MARGIN },
 	);
 	for (const i of items) io.observe(i);
 }

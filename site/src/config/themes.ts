@@ -1,6 +1,7 @@
 /**
  * The switchable Omarchy layer. Raw values are copied from basecamp/omarchy
- * `themes/<id>/colors.toml` (MIT, see site/NOTICE). `resolveTheme` derives the
+ * `themes/<id>/colors.toml` (MIT, see site/NOTICE); `wall` picks one of its
+ * background shades. `resolveTheme` derives the
  * roles the page paints with and guarantees WCAG AA for every text role, so
  * a theme whose own palette is too faint (a pastel green on a cream background)
  * keeps its hue and gets only as dark as legibility needs.
@@ -14,7 +15,8 @@ export interface RawTheme {
 	label: string;
 	mode: Mode;
 	background: string;
-	darker_background: string;
+	/** Tile gap colour: the theme's dark_background (dark themes) or darker_background (light themes). */
+	wall: string;
 	lighter_background: string;
 	selection: string;
 	muted: string;
@@ -30,42 +32,42 @@ export interface RawTheme {
 export const RAW_THEMES: RawTheme[] = [
 	{
 		id: 'tokyo-night', label: 'Tokyo Night', mode: 'dark',
-		background: '#1a1b26', darker_background: '#13141c', lighter_background: '#24283b',
+		background: '#1a1b26', wall: '#13141c', lighter_background: '#24283b',
 		selection: '#292e42', muted: '#414868',
 		foreground: '#a9b1d6', bright_foreground: '#c0caf5', dark_foreground: '#565f89',
 		accent: '#7aa2f7', green: '#9ece6a', yellow: '#e0af68', red: '#f7768e',
 	},
 	{
 		id: 'gruvbox', label: 'Gruvbox', mode: 'dark',
-		background: '#282828', darker_background: '#1e1e1e', lighter_background: '#3c3836',
+		background: '#282828', wall: '#1e1e1e', lighter_background: '#3c3836',
 		selection: '#504945', muted: '#665c54',
 		foreground: '#d4be98', bright_foreground: '#d4be98', dark_foreground: '#7c6f64',
 		accent: '#7daea3', green: '#a9b665', yellow: '#d8a657', red: '#ea6962',
 	},
 	{
 		id: 'everforest', label: 'Everforest', mode: 'dark',
-		background: '#2d353b', darker_background: '#21272c', lighter_background: '#343f44',
+		background: '#2d353b', wall: '#21272c', lighter_background: '#343f44',
 		selection: '#3d484d', muted: '#475258',
 		foreground: '#d3c6aa', bright_foreground: '#d3c6aa', dark_foreground: '#4f585e',
 		accent: '#7fbbb3', green: '#a7c080', yellow: '#dbbc7f', red: '#e67e80',
 	},
 	{
 		id: 'catppuccin', label: 'Catppuccin', mode: 'dark',
-		background: '#1e1e2e', darker_background: '#161622', lighter_background: '#313244',
+		background: '#1e1e2e', wall: '#161622', lighter_background: '#313244',
 		selection: '#45475a', muted: '#585b70',
 		foreground: '#cdd6f4', bright_foreground: '#cdd6f4', dark_foreground: '#6c7086',
 		accent: '#89b4fa', green: '#a6e3a1', yellow: '#f9e2af', red: '#f38ba8',
 	},
 	{
 		id: 'rose-pine', label: 'Rose Pine', mode: 'light',
-		background: '#faf4ed', darker_background: '#e1dbd5', lighter_background: '#f2e9e1',
+		background: '#faf4ed', wall: '#e1dbd5', lighter_background: '#f2e9e1',
 		selection: '#dfdad9', muted: '#cecacd',
 		foreground: '#575279', bright_foreground: '#575279', dark_foreground: '#9893a5',
 		accent: '#56949f', green: '#286983', yellow: '#ea9d34', red: '#b4637a',
 	},
 	{
 		id: 'flexoki-light', label: 'Flexoki Light', mode: 'light',
-		background: '#FFFCF0', darker_background: '#e5e2d8', lighter_background: '#E6E4D9',
+		background: '#FFFCF0', wall: '#e5e2d8', lighter_background: '#E6E4D9',
 		selection: '#CECDC3', muted: '#B7B5AC',
 		foreground: '#100F0F', bright_foreground: '#100F0F', dark_foreground: '#878580',
 		accent: '#205EA6', green: '#879A39', yellow: '#D0A215', red: '#D14D41',
@@ -110,7 +112,7 @@ export interface ResolvedTheme {
 }
 
 export function resolveTheme(t: RawTheme): ResolvedTheme {
-	const surfaces = [t.background, t.lighter_background, t.darker_background];
+	const surfaces = [t.background, t.lighter_background, t.wall];
 	const text = (candidates: string[]) => ensureContrast(candidates, surfaces, AA_TEXT, t.foreground);
 	const accent = text([t.accent]);
 	const onAccent = ensureContrast([t.background, t.foreground], [accent], AA_TEXT, t.foreground);
@@ -119,12 +121,12 @@ export function resolveTheme(t: RawTheme): ResolvedTheme {
 		id: t.id,
 		label: t.label,
 		mode: t.mode,
-		wall: t.darker_background,
+		wall: t.wall,
 		bg: t.background,
 		bgRaised: t.lighter_background,
 		selection: t.selection,
 		borderIdle: t.selection,
-		borderActive: ensureContrast([t.accent], [t.darker_background, t.background], AA_UI, t.foreground),
+		borderActive: ensureContrast([t.accent], [t.wall, t.background], AA_UI, t.foreground),
 		fg,
 		fgMuted: text([t.dark_foreground]),
 		accent,

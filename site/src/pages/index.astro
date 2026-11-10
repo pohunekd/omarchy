@@ -33,6 +33,7 @@ const verify = [
 	'cd release',
 	`sha256sum -c ${archive}.sha256`,
 	`gh attestation verify ${archive} --repo pohunekd/omarchy`,
+	`gh attestation verify ${archive}.sha256 --repo pohunekd/omarchy`,
 ];
 ---
 <Base
@@ -48,7 +49,7 @@ const verify = [
 			<h1 id="hero-h" class="display">Every coding agent on every machine, one keypress away in your Omarchy bar.</h1>
 			<p class="lede">Who is working, who is stuck waiting for you, and a real terminal on any of them in one click.</p>
 			<div class="crt crt--install">
-				<div class="crt-bar" aria-hidden="true"><span>bash - install</span><span>READ-ONLY</span></div>
+				<div class="crt-bar" aria-hidden="true"><span>bash - install</span><span>sh</span></div>
 				<div class="crt-screen">
 					<CopyLine command={INSTALL_COMMAND} typed label="Copy the install command" />
 					<p class="crt-note">That is the whole install.</p>
@@ -133,7 +134,7 @@ const verify = [
 				<p class="eyebrow"><span class="sect" aria-hidden="true">&sect; 3</span> Install</p>
 				<h2 id="install-h" class="display display--m">One command, then one click.</h2>
 				<div class="crt">
-					<div class="crt-bar" aria-hidden="true"><span>bash</span><span>PID 0003</span></div>
+					<div class="crt-bar" aria-hidden="true"><span>bash</span><span>sh</span></div>
 					<div class="crt-screen"><CopyLine command={INSTALL_COMMAND} label="Copy the install command" /></div>
 				</div>
 				<p>No pohunek on the machine yet? The panel offers <strong>Install pohunek</strong>: it fetches the latest release, verifies it, shows what will be written where, and asks once.</p>
@@ -228,6 +229,8 @@ const verify = [
 			</ol>
 		</Tile>
 
+	</main>
+	<div class="desk desk--foot">
 		<footer class="tile tile--paper foot" data-tile>
 			<div class="tile-title" aria-hidden="true"><span>pohunek - about</span><span class="tile-title-dim">sheet</span></div>
 			<div class="tile-body foot-body">
@@ -246,7 +249,7 @@ const verify = [
 				</ul>
 			</div>
 		</footer>
-	</main>
+	</div>
 	<script>
 		import '../scripts/site.ts';
 	</script>

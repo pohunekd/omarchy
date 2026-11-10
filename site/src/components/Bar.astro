@@ -6,7 +6,7 @@ import { WORKSPACES } from '../content';
 <header class="bar" role="banner">
 	<nav class="ws" aria-label="Workspaces">
 		{WORKSPACES.map((w, i) => (
-			<a href={`#${w.id}`} data-ws={w.id} title={w.name} aria-current={i === 0 ? 'true' : undefined} class:list={[{ 'is-active': i === 0 }]}><span class="sr-only">{w.name}: </span>{w.n}</a>
+			<a href={`${import.meta.env.BASE_URL}#${w.id}`} data-ws={w.id} title={w.name} aria-current={i === 0 ? 'true' : undefined} class:list={[{ 'is-active': i === 0 }]}><span class="sr-only">{w.name}: </span>{w.n}</a>
 		))}
 	</nav>
 	<p class="bar-title" aria-hidden="true">pohunek for Omarchy</p>
@@ -17,7 +17,7 @@ import { WORKSPACES } from '../content';
 			))}
 			<span class="picker-name" data-theme-name aria-hidden="true"></span>
 		</div>
-		<a class="bar-icon" href="#bar" title="The pohunek bar icon">
+		<a class="bar-icon" href={`${import.meta.env.BASE_URL}#bar`} title="The pohunek bar icon">
 			<span class="bar-icon-crop"><img src={barShot.src} width={barShot.width} height={barShot.height} alt="The pohunek bar icon: a cream plate with a cut-out prompt whose cursor is amber, and the number 2" /></span>
 		</a>
 		<time class="bar-clock" data-clock hidden></time>

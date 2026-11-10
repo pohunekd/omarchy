@@ -104,6 +104,9 @@ img {
 .bar-icon:focus-visible {
 	outline-offset: -3px;
 }
+.ws a.is-active:focus-visible {
+	outline-color: var(--on-accent);
+}
 
 .bar-title {
 	margin: 0;
@@ -162,6 +165,10 @@ img {
 }
 .picker button:focus-visible {
 	outline-offset: -2px;
+}
+.picker button[aria-checked='true']:focus-visible {
+	outline-color: var(--fg);
+	outline-offset: 3px;
 }
 .picker-name {
 	display: none;
@@ -236,6 +243,9 @@ img {
 	padding: var(--gap-out);
 	/* a tile waiting to slide in sits 14px to the right; it must not widen the page */
 	overflow-x: clip;
+}
+.desk--foot {
+	padding-top: 0;
 }
 .desk > section:not(.tile),
 .desk > footer {
@@ -315,7 +325,7 @@ img {
 .tile:hover,
 .tile:focus-within,
 .tile.is-focus {
-	border-color: var(--accent);
+	border-color: var(--border-active);
 }
 .js .tile:hover:not(.is-focus),
 .js .tile:focus-within:not(.is-focus) {
@@ -336,7 +346,6 @@ img {
 }
 .tile-title-dim {
 	font-weight: 400;
-	opacity: 0.8;
 }
 .tile:hover .tile-title,
 .tile:focus-within .tile-title,
@@ -550,8 +559,7 @@ a {
 a:hover {
 	background: var(--code-bg, var(--bg-raised));
 }
-.tile--paper a:focus-visible,
-.tile--paper button:focus-visible {
+.tile--paper a:focus-visible {
 	outline-color: var(--ink-strong);
 }
 
@@ -698,7 +706,7 @@ kbd {
 }
 .crt--install .cmd-cursor {
 	display: inline-block;
-	animation: blink 1.1s steps(1) infinite;
+	animation: blink 1.1s steps(1) 6;
 }
 @keyframes blink {
 	50% {

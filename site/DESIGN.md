@@ -66,7 +66,7 @@ light surface amber text falls back to a darker amber that reaches AA.
 Tiles slide in on scroll (transform and opacity only, 180ms), the focus border
 follows the pointer, the install command is typed once when its line is wide
 enough to stay on one row, and the amber cursor blinks. Everything is off under
-`prefers-reduced-motion` (the demo GIF is replaced by its first frame). All
+`prefers-reduced-motion` (the demo GIF is replaced by a still of the panel). All
 content is in the HTML; JS only adds the picker, the workspace indicator, the
 clock, copy buttons and the effects above.
 
