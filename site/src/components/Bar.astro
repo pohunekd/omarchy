@@ -1,0 +1,25 @@
+---
+import barShot from '../generated/bar.png';
+import { THEMES, DEFAULT_DARK } from '../config/themes';
+import { WORKSPACES } from '../content';
+---
+<header class="bar" role="banner">
+	<nav class="ws" aria-label="Workspaces">
+		{WORKSPACES.map((w, i) => (
+			<a href={`${import.meta.env.BASE_URL}#${w.id}`} data-ws={w.id} title={w.name} aria-current={i === 0 ? 'true' : undefined} class:list={[{ 'is-active': i === 0 }]}><span class="sr-only">{w.name}: </span>{w.n}</a>
+		))}
+	</nav>
+	<p class="bar-title" aria-hidden="true">pohunek for Omarchy</p>
+	<div class="bar-right">
+		<div class="picker" role="radiogroup" aria-label="Colour theme" hidden data-picker>
+			{THEMES.map((t) => (
+				<button type="button" role="radio" aria-checked="false" aria-label={t.label} title={t.label} data-theme-id={t.id} tabindex={t.id === DEFAULT_DARK ? 0 : -1} style={`--sw-bg:${t.bg};--sw-ac:${t.accent};--sw-fg:${t.fg}`}><span class="sw"></span></button>
+			))}
+			<span class="picker-name" data-theme-name aria-hidden="true"></span>
+		</div>
+		<a class="bar-icon" href={`${import.meta.env.BASE_URL}#bar`} title="The pohunek bar icon">
+			<span class="bar-icon-crop"><img src={barShot.src} width={barShot.width} height={barShot.height} alt="The pohunek bar icon: a cream plate with a cut-out prompt whose cursor is amber, and the number 2" /></span>
+		</a>
+		<time class="bar-clock" data-clock hidden></time>
+	</div>
+</header>

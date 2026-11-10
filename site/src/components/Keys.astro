@@ -1,0 +1,19 @@
+---
+interface Props {
+	rows: Array<{ keys: string[]; does: string }>;
+	caption: string;
+}
+const { rows, caption } = Astro.props;
+---
+<table class="ledger keys">
+	<caption class="sr-only">{caption}</caption>
+	<thead><tr><th scope="col">Keys</th><th scope="col">Does</th></tr></thead>
+	<tbody>
+		{rows.map((r) => (
+			<tr>
+				<td class="keys-cell">{r.keys.map((k) => <kbd>{k}</kbd>)}</td>
+				<td>{r.does}</td>
+			</tr>
+		))}
+	</tbody>
+</table>

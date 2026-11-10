@@ -15,7 +15,10 @@
 8. `qml`: `tests/qml_check.py`, only when `quickshell` and the Omarchy shell
    exist; otherwise it is `not run`
 
-CI runs the same set except `qml`. Run it on the final revision before every
+CI runs the same set except `qml`, plus the `site` job. A change under `site/`
+also needs `cd site && bun test && bun run build` locally, and screenshots of
+the hero at 1440 px and 390 px in the PR (dark and light), taken with headless
+Chromium against `bun run preview`. Run it on the final revision before every
 push and report each gate's real result. Never report a gate as passed when it
 was skipped, not run, or its output was cut off.
 
@@ -67,6 +70,8 @@ screenshots come only from the panel running against `tools/demo-pohunek`.
 - `changelog` (pull requests) validates every fragment and runs
   `scripts/require-fragment`: a fragment is required unless the pull request
   carries `no-changelog`.
+- `site` (always) installs the landing page dependencies, runs `bun test` and
+  `bun run build` in `site/`.
 - `ci` is the aggregate and the only required status check.
 - A newer push cancels the previous run of the same PR; `main` runs are never
   cancelled.

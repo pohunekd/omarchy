@@ -1,0 +1,14 @@
+---
+/** A terminal line that holds a command; the copy button is shown only when scripts run. */
+interface Props {
+	command: string;
+	prompt?: string;
+	typed?: boolean;
+	label: string;
+}
+const { command, prompt = '$', typed = false, label } = Astro.props;
+---
+<div class="cmd">
+	<p class="cmd-line"><span class="cmd-prompt" aria-hidden="true">{prompt}</span> <code class:list={['cmd-text', { 'cmd-typed': typed }]} style={typed ? `--chars:${command.length}` : undefined} data-copy-source>{command}</code><span class="cmd-cursor" aria-hidden="true"></span></p>
+	<button class="copy" type="button" hidden data-copy aria-label={label}>copy</button>
+</div>

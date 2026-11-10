@@ -1,0 +1,17 @@
+---
+/** A Hyprland-style window: 2px border, a title bar in the border colour, flat body. */
+interface Props {
+	kind: 'paper' | 'term' | 'split';
+	title: string;
+	id?: string;
+	class?: string;
+	labelledby?: string;
+	reveal?: boolean;
+	'data-ws-section'?: string;
+}
+const { kind, title, id, class: cls = '', labelledby, reveal = true, ...rest } = Astro.props;
+---
+<section id={id} class:list={['tile', `tile--${kind}`, cls]} aria-labelledby={labelledby} data-tile data-reveal={reveal ? '' : undefined} {...rest}>
+	<div class="tile-title" aria-hidden="true"><span>{title}</span><span class="tile-title-dim">{kind === 'term' ? 'term' : kind === 'split' ? 'term + sheet' : 'sheet'}</span></div>
+	<div class="tile-body"><slot /></div>
+</section>

@@ -47,7 +47,8 @@ gate_manifest() {
 # shellcheck disable=SC2317,SC2329
 gate_symlinks() {
   local link
-  link="$(find . -name .git -prune -o -type l -print -quit)"
+  # site/node_modules and site/dist are untracked package-manager output (it links executables).
+  link="$(find . -name .git -prune -o -path ./site/node_modules -prune -o -path ./site/dist -prune -o -path ./site/.astro -prune -o -type l -print -quit)"
   if [ -n "$link" ]; then
     echo "symlink in the plugin folder: $link" >&2
     return 1
