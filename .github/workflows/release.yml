@@ -36,6 +36,7 @@ on:
       - "scripts/changelog"
       - "scripts/changelog.py"
       - "scripts/gates"
+      - "scripts/release-body"
       - "changelog.toml"
       - "CHANGELOG.md"
       - "changelog.d/**"
