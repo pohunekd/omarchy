@@ -53,6 +53,16 @@ The workflow stops in `prepare` when the tag and `manifest.json` disagree, in
 `build` when a gate fails or the archive is wrong, and in `body` when the
 changelog has no section for the version or fragments are left.
 
+A tag must point at a commit on `main`; `prepare` refuses any other.
+
+If `publish` fails after it created the draft (for example a transient API
+error during verification), a rerun stops with "a release or draft for vX.Y.Z
+already exists". Delete the draft, keeping the tag, then re-run the failed jobs:
+
+```bash
+gh release delete vX.Y.Z --repo pohunekd/omarchy --yes
+```
+
 ## Verify
 
 ```bash
@@ -68,6 +78,6 @@ Check that the release body holds the changelog block between the two markers.
 ## Workflow jobs
 
 `prepare` (version), `build` (gates, archive, checksum, extract and validate),
-`body` (release body), `attest` (only `id-token` and `attestations: write`, tag
+`body` (release body; `scripts/release-body` previews the next release on pull requests, under a preview patch version when the manifest version already has its section), `attest` (only `id-token` and `attestations: write`, tag
 pushes only), `publish` (only `contents: write`, tag pushes only: draft, verify
 assets and body, publish). Every action is pinned to a commit SHA.

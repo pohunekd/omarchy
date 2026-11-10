@@ -400,6 +400,63 @@ def git(cwd, *args):
     )
 
 
+class ReleaseBody(Scratch):
+    """scripts/release-body renders the changelog block of a release body."""
+
+    SECTION = "# Changelog\n\n## 0.3.0 - 2026-11-10\n\n### Added\n\n- First.\n"
+
+    def repo(self, changelog, fragment=None):
+        root = self.scratch()
+        (root / "scripts").mkdir()
+        for name in ("release-body", "changelog.py"):
+            shutil.copy(ROOT / "scripts" / name, root / "scripts" / name)
+        (root / "changelog.toml").write_text('repository = "example/app"\nchangelog = "CHANGELOG.md"\n')
+        (root / "CHANGELOG.md").write_text(changelog)
+        (root / "changelog.d").mkdir()
+        (root / "changelog.d" / ".gitkeep").write_text("")
+        if fragment:
+            (root / "changelog.d" / "12-fix.md").write_text(VALID)
+        return root
+
+    def run_body(self, root, mode, version="0.3.0"):
+        return subprocess.run([str(root / "scripts" / "release-body"), version, mode], cwd=self.scratch(), capture_output=True, text=True)
+
+    def test_dry_run_with_section_and_fragment_previews_the_next_patch(self):
+        root = self.repo(self.SECTION, fragment=True)
+        result = self.run_body(root, "dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("- A change. ([#12](https://github.com/example/app/issues/12))", result.stdout)
+        self.assertIn("preview folded as 0.3.1", result.stderr)
+        self.assertEqual(read(root / "CHANGELOG.md"), self.SECTION)
+        self.assertTrue((root / "changelog.d" / "12-fix.md").exists())
+
+    def test_dry_run_with_section_and_no_fragment_prints_the_section(self):
+        result = self.run_body(self.repo(self.SECTION), "dry-run")
+        self.assertEqual((result.returncode, result.stdout), (0, f"{tool.START_MARKER}\n### Added\n\n- First.\n{tool.END_MARKER}\n"))
+
+    def test_dry_run_without_section_folds_under_the_manifest_version(self):
+        root = self.repo("# Changelog\n", fragment=True)
+        result = self.run_body(root, "dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("### Added", result.stdout)
+        self.assertNotIn("preview folded", result.stderr)
+        self.assertEqual(read(root / "CHANGELOG.md"), "# Changelog\n")
+
+    def test_push_refuses_unfolded_fragments_and_a_missing_section(self):
+        result = self.run_body(self.repo(self.SECTION, fragment=True), "push")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not folded", result.stderr)
+        result = self.run_body(self.repo("# Changelog\n"), "push")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no section for 0.3.0", result.stderr)
+        self.assertEqual(self.run_body(self.repo(self.SECTION), "push").returncode, 0)
+
+    def test_bad_arguments_exit_2(self):
+        root = self.repo(self.SECTION)
+        self.assertEqual(self.run_body(root, "bogus").returncode, 2)
+        self.assertEqual(self.run_body(root, "push", "v1").returncode, 2)
+
+
 class RequireFragment(Scratch):
     """scripts/require-fragment is the pull request check CI runs."""
 

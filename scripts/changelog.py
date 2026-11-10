@@ -3,8 +3,10 @@
 contract, version 1. Every operation validates all fragments before it
 writes anything.
 
-Rules, markers, output bytes and exit codes follow the reference
-implementation in pohunekd/pohunek-companion (crates/changelog).
+Rules, markers, exit codes, standard output and written files follow the
+reference implementation in pohunekd/pohunek-companion (crates/changelog).
+Error text may differ: a quoted header value escapes only backslash, quote
+and the C0 escapes, not every non-printable code point.
 
 usage: changelog check
        changelog fold <version> [--surface <name>] [--date YYYY-MM-DD]
