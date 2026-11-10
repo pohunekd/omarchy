@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """scripts/check-symlinks judges tracked mode 120000, not paths. Run: python3 -I tests/symlinks_test.py"""
+import os
 import subprocess
 import tempfile
 import unittest
@@ -9,12 +10,16 @@ ROOT = Path(__file__).resolve().parent.parent
 CHECK = ROOT / "scripts" / "check-symlinks"
 
 
+# Git variables set by hooks would point git at the real repository.
+CLEAN_ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
 def git(repo, *args):
-    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, env=CLEAN_ENV)
 
 
 def check(repo):
-    return subprocess.run([str(CHECK), str(repo)], capture_output=True, text=True)
+    return subprocess.run([str(CHECK), str(repo)], capture_output=True, text=True, env=CLEAN_ENV)
 
 
 class SymlinkGate(unittest.TestCase):

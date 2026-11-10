@@ -20,10 +20,10 @@ export function versionOfTag(tag: unknown): string {
 	return m[1];
 }
 
-/** First `## X.Y.Z - YYYY-MM-DD` heading of a CHANGELOG.md. */
-export function latestRelease(changelog: string): { version: string; date: string } | null {
-	const m = /^## (\d+\.\d+\.\d+) - (\d{4}-\d{2}-\d{2})\s*$/m.exec(changelog);
-	return m ? { version: m[1], date: m[2] } : null;
+/** The `## X.Y.Z - YYYY-MM-DD` heading of one version in a CHANGELOG.md. */
+export function releaseDate(changelog: string, version: string): string | null {
+	const m = new RegExp(`^## ${version.replaceAll('.', '\\.')} - (\\d{4}-\\d{2}-\\d{2})\\s*$`, 'm').exec(changelog);
+	return m ? m[1] : null;
 }
 
 /** The page advertises the published release only, never the manifest version of unreleased work. */
@@ -32,6 +32,5 @@ export function readFacts(published: string | undefined = process.env[RELEASE_EN
 		throw new Error(`${RELEASE_ENV} is not set: build with ${RELEASE_ENV}=$(bun scripts/latest-release.ts)`);
 	}
 	const version = versionOfTag(`v${published}`);
-	const release = latestRelease(readFileSync(resolve(root, 'CHANGELOG.md'), 'utf8'));
-	return { version, released: release?.version === version ? release.date : null };
+	return { version, released: releaseDate(readFileSync(resolve(root, 'CHANGELOG.md'), 'utf8'), version) };
 }

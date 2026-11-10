@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { cssExternal, externalRequests, hasLang, imagesWithoutAlt, scriptNetworkUse } from '../src/lib/dist-check';
-import { latestRelease, readFacts, versionOfTag } from '../src/lib/facts';
+import { readFacts, releaseDate, versionOfTag } from '../src/lib/facts';
 
 describe('dist-check', () => {
 	test('flags subresources that leave the origin, not plain links', () => {
@@ -36,12 +36,11 @@ describe('dist-check', () => {
 });
 
 describe('facts', () => {
-	test('reads the newest changelog heading', () => {
-		expect(latestRelease('# Changelog\n\n## 0.4.0 - 2026-12-01\n\n## 0.3.0 - 2026-11-10\n')).toEqual({
-			version: '0.4.0',
-			date: '2026-12-01',
-		});
-		expect(latestRelease('# Changelog')).toBeNull();
+	test('finds the date of the published version, not just the newest heading', () => {
+		const log = '# Changelog\n\n## 0.4.0 - 2026-12-01\n\n## 0.3.0 - 2026-11-10\n';
+		expect(releaseDate(log, '0.3.0')).toBe('2026-11-10');
+		expect(releaseDate(log, '0.30')).toBeNull();
+		expect(releaseDate('# Changelog', '0.3.0')).toBeNull();
 	});
 	test('takes the published release, and refuses to guess without one', () => {
 		expect(versionOfTag('v1.2.3')).toBe('1.2.3');
@@ -49,6 +48,7 @@ describe('facts', () => {
 		expect(() => readFacts(undefined)).toThrow('SITE_RELEASE_VERSION');
 		expect(readFacts('0.3.0').version).toBe('0.3.0');
 		expect(readFacts('99.0.0').released).toBeNull();
+		expect(readFacts('0.3.0').released).toBe('2026-11-10');
 	});
 });
 
