@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# Puts this machine on the overlay network pohunek uses between machines:
+# NetBird (pohunek's default) or Tailscale (built into Omarchy). Installs the
+# client when it is missing, joins the network, writes
+# ~/.config/pohunek/overlays.toml to match, and restarts the pohunek daemon
+# (live sessions keep running: workers outlive a daemon restart).
+#
+#   setup-network                         ask which overlay
+#   setup-network netbird [--management-url URL] [--setup-key-file FILE]
+#   setup-network tailscale [--login-server URL]
+#   setup-network --status                print the overlay this machine uses
+#
+# Every machine must use the same overlay; tools/distribute copies the choice.
+set -euo pipefail
+
+say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+die() { printf '\n\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/pohunek"
+config="$config_dir/overlays.toml"
+
+current_overlay() {
+  if [[ -f $config ]]; then
+    sed -nE 's/^\s*providers\s*=\s*\[\s*"([a-z]+)"\s*\].*/\1/p' "$config" | head -1
+  else
+    echo netbird
+  fi
+}
+
+overlay=""
+management_url=""
+setup_key_file=""
+login_server=""
+while (( $# > 0 )); do
+  case $1 in
+  netbird | tailscale) overlay=$1 ;;
+  --management-url) management_url=${2:?}; shift ;;
+  --setup-key-file) setup_key_file=${2:?}; shift ;;
+  --login-server) login_server=${2:?}; shift ;;
+  --status) current_overlay; exit 0 ;;
+  -h | --help) sed -n '2,15p' "$0"; exit 0 ;;
+  *) die "unknown argument: $1" ;;
+  esac
+  shift
+done
+
+if [[ -z $overlay ]]; then
+  say "Which network should pohunek use between your machines?"
+  echo "  NetBird    pohunek's default; self-hosted or netbird.io; WireGuard mesh"
+  echo "  Tailscale  built into Omarchy (bar widget, Taildrop); tailnet or Headscale"
+  echo "Currently: $(current_overlay)"
+  if command -v gum >/dev/null 2>&1; then
+    overlay=$(gum choose --header "Overlay" netbird tailscale) || exit 130
+  else
+    read -r -p "netbird or tailscale? " overlay
+  fi
+fi
+[[ $overlay == netbird || $overlay == tailscale ]] || die "Pick netbird or tailscale."
+
+joined() {
+  case $overlay in
+  netbird) netbird status --json 2>/dev/null | jq -e '.management.connected == true' >/dev/null 2>&1 ;;
+  tailscale) tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1 ;;
+  esac
+}
+
+if [[ $overlay == tailscale ]]; then
+  if ! command -v tailscale >/dev/null 2>&1; then
+    say "Installing Tailscale (omarchy install service tailscale)…"
+    omarchy install service tailscale
+  fi
+  if ! joined; then
+    say "Joining your tailnet…"
+    sudo tailscale up ${login_server:+--login-server="$login_server"}
+  fi
+else
+  if ! command -v netbird >/dev/null 2>&1; then
+    say "Installing NetBird (AUR netbird-bin: the official release binaries)…"
+    omarchy pkg aur add netbird-bin
+  fi
+  if ! systemctl is-active --quiet netbird 2>/dev/null; then
+    sudo netbird service install 2>/dev/null || true
+    sudo netbird service start
+  fi
+  if ! joined; then
+    if [[ -z $management_url ]]; then
+      read -r -p "NetBird management URL (empty = netbird.io cloud): " management_url
+    fi
+    args=()
+    [[ -n $management_url ]] && args+=(--management-url "$management_url")
+    if [[ -n $setup_key_file ]]; then
+      # The key travels in a file, never in argv or this script's output.
+      args+=(--setup-key-file "$setup_key_file")
+    fi
+    say "Joining NetBird${management_url:+ at $management_url}…"
+    echo "Without a setup key, NetBird prints a login link: open it in the browser."
+    netbird up "${args[@]}"
+  fi
+fi
+
+joined || die "$overlay is installed but not connected yet; finish its login and run this again."
+echo "$overlay: connected."
+
+say "Pointing pohunek at $overlay…"
+mkdir -p "$config_dir"
+chmod 700 "$config_dir"
+if [[ $overlay == netbird && ! -f $config ]]; then
+  echo "NetBird is pohunek's default; no overlays.toml needed."
+else
+  tmp=$(mktemp "$config_dir/.overlays.XXXXXX")
+  printf 'providers = ["%s"]\n' "$overlay" >"$tmp"
+  chmod 600 "$tmp"
+  mv "$tmp" "$config"
+  echo "Wrote $config"
+fi
+
+if command -v pohunek >/dev/null 2>&1; then
+  unit=$(pohunek service status --json 2>/dev/null | jq -r '.ok.daemon.service_id // empty')
+  if [[ -n $unit ]]; then
+    systemctl --user restart "$unit"
+    sleep 2
+    echo "Restarted $unit (sessions keep running)."
+  fi
+  pohunek host discover --refresh --json 2>/dev/null |
+    jq -r '.ok[] | select(.classification == "reachable_daemon") | "  pohunek host: \(.name) (\(.address))"' || true
+else
+  echo "pohunek is not installed yet: tools/install-pohunek"
+fi
+
+say "Done. Other machines must use $overlay too: tools/distribute copies this choice."

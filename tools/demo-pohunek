@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""A stand-in `pohunek` CLI with synthetic sessions on three hosts.
+
+Point the widget at it to try the panel without a daemon, or to take
+screenshots that show no real work:
+
+    omarchy bar set pohunek.sessions command ~/.config/omarchy/plugins/pohunek.sessions/tools/demo-pohunek
+
+and back with `omarchy bar set pohunek.sessions command pohunek`. Answers only
+the read commands the widget uses; anything else prints what it would do.
+"""
+import json, sys, time
+
+args = sys.argv[1:]
+host = "local"
+if "--host" in args:
+    i = args.index("--host")
+    host = args[i + 1] if i + 1 < len(args) else "local"
+    args = args[:i] + args[i + 2:]
+if host in ("workstation",):
+    host = "local"
+
+
+def ago(seconds):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - seconds))
+
+
+def env(ok):
+    print(json.dumps({"cli_version": "0.41.0-demo", "protocol": {"minimum": 5, "maximum": 5}, "ok": ok}))
+
+
+def session(sid, name, agent, activity, project, group=None, link=None, branch="", updated=60, subagents=0,
+            state="running", runtime="live", created=7200):
+    meta = {}
+    if group:
+        meta["companion.group"] = group
+    if link:
+        provider, kind, lid = link
+        meta.update({"work.link.provider": provider, "work.link.kind": kind, "work.link.id": lid,
+                     "work.link.url": f"https://github.com/acme/{project}/pull/{lid}" if provider == "github" else f"https://linear.app/acme/issue/{lid}"})
+    return {
+        "id": sid, "name": name, "agent": agent, "agent_base": agent, "cwd": f"/home/dev/code/{project}",
+        "pid": 4242, "cols": 120, "rows": 40, "state": state, "state_source": "detected",
+        "activity": activity if state == "running" else None, "runtime": {"state": runtime, "runtime_generation": 1},
+        "subagents": [{"id": f"a{i}", "provider": agent, "lifecycle": "running", "revision": 1, "started_at_ms": 0, "updated_at_ms": 0} for i in range(subagents)],
+        "project_label": project, "branch": branch, "metadata": meta, "capabilities": {},
+        "native_session_id": "n-" + sid, "created_at": ago(created), "updated_at": ago(updated),
+    }
+
+
+SESSIONS = {
+    "local": [
+        session("s-01JDEMO00000000000000000A1", "review-pr-1412", "claude", "blocked", "ripgrep", link=("github", "pr", "1412"), branch="review/1412", updated=240),
+        session("s-01JDEMO00000000000000000A2", "bump-tokio-1.48", "claude", "working", "tokio", group="Dependencies", link=("github", "pr", "7210"), branch="deps/tokio-1.48", subagents=2),
+        session("s-01JDEMO00000000000000000A3", "docs-install-guide", "claude", "working", "pohunek-companion", link=("github", "pr", "57"), branch="docs/install"),
+        session("s-01JDEMO00000000000000000A4", "release-notes-0.4", "codex", "idle", "pohunek-companion", group="Release", updated=3600),
+        session("s-01JDEMO00000000000000000A5", "scratch-shell", "shell", "idle", "pohunek-companion", updated=900),
+    ],
+    "buildbox": [
+        session("s-01JDEMO00000000000000000B1", "fix-flaky-pty-test", "codex", "blocked", "pohunek", link=("github", "issue", "388"), branch="fix/pty-flake", updated=600),
+        session("s-01JDEMO00000000000000000B2", "migrate-config-schema", "claude", "working", "pohunek", group="Dependencies", link=("github", "pr", "401"), branch="feat/config-v2", subagents=1),
+        session("s-01JDEMO00000000000000000B3", "nightly-bench-sweep", "codex", "working", "tokio", group="Dependencies"),
+        session("s-01JDEMO00000000000000000B4", "old-spike", "claude", None, "pohunek", state="stopped", runtime="terminal", updated=86400),
+    ],
+    "laptop": [
+        session("s-01JDEMO00000000000000000C1", "profile-startup-time", "codex", "idle", "neovim", link=("github", "pr", "3191"), branch="perf/startup", updated=1800),
+        session("s-01JDEMO00000000000000000C2", "lsp-semantic-tokens", "claude", "working", "neovim", group="Release", link=("linear", "issue", "NV-212")),
+    ],
+}
+NOTES = {
+    "local": [{"id": "n-1", "source": "hook", "kind": "approval_required", "severity": "warning", "status": "unread",
+               "title": "claude wants to run cargo publish --dry-run", "body": "review-pr-1412", "metadata": {},
+               "created_at": ago(240), "session_id": "s-01JDEMO00000000000000000A1"}],
+    "buildbox": [], "laptop": [],
+}
+ADDRESSES = {"local": "100.64.0.10", "buildbox": "100.64.0.21", "laptop": "100.64.0.34"}
+
+cmd = [a for a in args if a not in ("--json", "--unread", "--refresh", "-q")]
+if cmd[:2] == ["session", "list"]:
+    env(SESSIONS.get(host, []))
+elif cmd[:2] == ["notifications", "list"]:
+    env({"notifications": NOTES.get(host, [])})
+elif cmd[:2] == ["host", "discover"]:
+    env([{"name": "workstation" if h == "local" else h, "fqdn": f"{h}.mesh", "address": a, "port": 18722,
+          "overlay": "netbird", "local": h == "local", "classification": "reachable_daemon"} for h, a in ADDRESSES.items()])
+elif cmd[:2] == ["host", "inspect"]:
+    env({"supported_agents": ["claude", "codex", "shell", "pi"],
+         "runtimes": [{"agent": a, "agent_base": a, "available": True} for a in ("claude", "codex", "shell", "pi")]})
+elif cmd[:2] == ["project", "list"]:
+    env([{"id": f"p-{i:08x}", "label": p, "last_used_at": ago(i * 3600)} for i, p in enumerate(
+        ["pohunek", "pohunek-companion", "pohunek-companion-android", "ripgrep", "tokio", "neovim", "helix",
+         "zellij", "wezterm", "alacritty", "hyprland", "quickshell", "omarchy"])])
+elif cmd[:1] == ["--version"]:
+    print("pohunek 0.41.0-demo")
+else:
+    print("demo-pohunek:", " ".join(sys.argv[1:]), file=sys.stderr)
+    print("(demo mode: nothing was changed)")

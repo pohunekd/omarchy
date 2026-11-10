@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Installs the pohunek daemon on this machine, the way the pohunek README asks
+# an agent to: latest release, checksum (and GitHub attestation when `gh` is
+# signed in), a preview of what will be written where, one confirmation, then
+# the release's own installer. Run by the widget's "Install pohunek" button in
+# a floating terminal; safe to run by hand.
+#
+# Never passes --accept-runtime-loss, --stop-sessions or --purge.
+#
+#   --yes         no questions (used by tools/distribute over SSH); agent hooks
+#                 are then left alone unless --hooks is given too
+#   --hooks       with --yes, also install the claude/codex hooks that apply
+set -euo pipefail
+
+ASSUME_YES=0
+HOOKS=0
+for arg in "$@"; do
+  case $arg in
+  --yes | -y) ASSUME_YES=1 ;;
+  --hooks) HOOKS=1 ;;
+  -h | --help) sed -n '2,15p' "$0"; exit 0 ;;
+  *) echo "unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
+
+REPO="zajca/pohunek"
+API="https://api.github.com/repos/$REPO/releases/latest"
+
+say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+die() { printf '\n\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
+confirm() {
+  (( ASSUME_YES )) && return 0
+  if command -v gum >/dev/null 2>&1; then gum confirm "$1"
+  else read -r -p "$1 [y/N] " answer; [[ $answer == [yY]* ]]; fi
+}
+
+[[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] ||
+  die "pohunek releases cover Linux x86_64 here (macOS: brew install zajca/pohunek/pohunek). This machine is $(uname -sm)."
+for tool in curl tar sha256sum jq; do
+  command -v "$tool" >/dev/null 2>&1 || die "$tool is required."
+done
+
+if command -v pohunek >/dev/null 2>&1 && pohunek health --json >/dev/null 2>&1; then
+  say "pohunek $(pohunek --version | awk '{print $2}') is already installed and its daemon answers."
+  echo "Upgrades: download the new release and run its packaging/install-daemon.sh, or see https://pohunek.dev/docs/."
+  exit 0
+fi
+
+say "Looking up the latest pohunek release…"
+release=$(curl -fsSL --max-time 30 "$API") || die "Could not reach GitHub."
+tag=$(jq -r '.tag_name' <<<"$release")
+version=${tag#v}
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$ ]] || die "Unexpected release tag: $tag"
+archive="pohunek-daemon-${version}-x86_64-unknown-linux-gnu.tar.gz"
+base="https://github.com/$REPO/releases/download/$tag"
+echo "Release $tag: $archive"
+
+work=$(mktemp -d -t pohunek-install.XXXXXX)
+trap 'rm -rf "$work"' EXIT
+cd "$work"
+
+say "Downloading and verifying…"
+curl -fL --progress-bar --max-time 600 -o "$archive" "$base/$archive"
+curl -fsSL --max-time 30 -o "$archive.sha256" "$base/$archive.sha256"
+sha256sum -c "$archive.sha256" || die "Checksum mismatch: not installing."
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  gh attestation verify "$archive" --repo "$REPO" >/dev/null || die "Attestation check failed: not installing."
+  echo "GitHub build attestation: verified."
+else
+  echo "GitHub build attestation: skipped (gh is not signed in). The installer still verifies the archive MANIFEST."
+fi
+
+mkdir extract
+tar -xzf "$archive" -C extract
+dir="extract/pohunek-daemon-${version}-x86_64-unknown-linux-gnu"
+[[ -x $dir/pohunek && -x $dir/packaging/install-daemon.sh ]] || die "The archive does not have the expected layout."
+
+say "What the installer will do"
+plan=$("$dir/pohunek" service check --json) || die "pohunek service check refused: $plan"
+jq -r '.ok | "  operation  \(.operation)\n  version    \(.version)\n  prefix     \(.prefix)  (binaries in \(.prefix)/libexec/pohunek/\(.version), command in \(.prefix)/bin/pohunek)\n  config     \(.config_path)\n  service    systemd user unit pohunek-\(.namespace)-daemon.service"' <<<"$plan"
+echo
+confirm "Install pohunek $version as a login service?" || die "Cancelled; nothing was changed."
+
+say "Installing…"
+(cd "$dir" && ./packaging/install-daemon.sh </dev/null)
+
+export PATH="$(jq -r '.ok.prefix' <<<"$plan")/bin:$PATH"
+say "Checking the daemon…"
+pohunek health --json | jq -r '.ok | "  daemon \(.daemon_version), protocol \(.protocol_version): \(.status)"'
+pohunek doctor >/dev/null 2>&1 || echo "  pohunek doctor reports warnings; run it to see them (NetBird or agent runtimes missing is fine for a single machine)."
+
+# Agent hooks write into the agent's own config home, so they are offered one
+# by one and never installed without a yes.
+for agent in claude codex; do
+  if command -v "$agent" >/dev/null 2>&1; then
+    home=$([[ $agent == claude ]] && echo "~/.claude" || echo "~/.codex")
+    if (( ASSUME_YES && ! HOOKS )); then
+      echo "  $agent found: install its hooks later with: pohunek integration install --agent $agent"
+    elif confirm "Install pohunek's $agent hooks into $home (session resume, better 'needs you' detection)?"; then
+      pohunek integration install --agent "$agent" || echo "  $agent hooks: install failed; see pohunek integration doctor."
+    fi
+  fi
+done
+
+say "Done. The bar widget picks the daemon up on its next refresh."
+echo "Start a session from the widget (+), or: pohunek session new --agent claude"

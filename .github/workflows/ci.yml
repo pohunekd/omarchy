@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Model rules
+        run: node tests/model.test.js
+      - name: fetch.py against the demo CLI
+        run: |
+          python3 -m py_compile fetch.py tools/demo-pohunek
+          python3 -I fetch.py --bin "$PWD/tools/demo-pohunek" --discover --machines > /tmp/snapshot.json
+          node tests/model.test.js /tmp/snapshot.json
+      - name: Manifest and translations
+        run: |
+          python3 - <<'PY'
+          import json, glob
+          m = json.load(open("manifest.json"))
+          assert m["id"] == "pohunek.sessions" and m["entryPoints"]["barWidget"] == "Panel.qml"
+          en = json.load(open("i18n/en.json"))
+          for f in glob.glob("i18n/*.json"):
+              d = json.load(open(f))
+              missing = set(en) - set(d)
+              assert not missing, f"{f} misses {sorted(missing)}"
+          print("manifest and", len(glob.glob("i18n/*.json")), "catalogs ok")
+          PY
+      - name: Shell scripts
+        run: |
+          for f in tools/install-pohunek tools/setup-network tools/distribute tools/add-shortcuts; do bash -n "$f"; done
+          shellcheck -S error tools/install-pohunek tools/setup-network tools/distribute tools/add-shortcuts

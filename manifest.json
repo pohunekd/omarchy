@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "id": "pohunek.sessions",
+  "name": "pohunek",
+  "version": "0.3.0",
+  "author": "pohunekd",
+  "license": "MIT",
+  "description": "pohunek in the Omarchy bar: every coding agent on every machine, the ones that need you on top, one click to a real terminal.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "pohunek",
+    "description": "Sessions of every pohunek host: Needs you first, My groups / By state, State/Project/Host filters, attach, details, rename, groups, stop, remove, resume, new session.",
+    "category": "AI",
+    "aliases": [
+      "pohunek",
+      "agent-sessions"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 5,
+      "hosts": "",
+      "discover": true,
+      "idleThresholdSec": 300,
+      "command": "pohunek",
+      "desktopNotifications": true
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 2,
+        "max": 600,
+        "step": 1,
+        "defaultValue": 5
+      },
+      {
+        "key": "hosts",
+        "type": "string",
+        "label": "Extra hosts (comma separated)",
+        "defaultValue": ""
+      },
+      {
+        "key": "discover",
+        "type": "boolean",
+        "label": "Follow pohunek hosts discovered on the overlay",
+        "defaultValue": true
+      },
+      {
+        "key": "idleThresholdSec",
+        "type": "integer",
+        "label": "Idle after (seconds, companion.toml wins)",
+        "min": 10,
+        "max": 86400,
+        "step": 10,
+        "defaultValue": 300
+      },
+      {
+        "key": "command",
+        "type": "string",
+        "label": "pohunek binary",
+        "defaultValue": "pohunek"
+      },
+      {
+        "key": "desktopNotifications",
+        "type": "boolean",
+        "label": "Notify when a session needs you",
+        "defaultValue": true
+      }
+    ]
+  },
+  "homepage": "https://github.com/pohunekd/omarchy"
+}

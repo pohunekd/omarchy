@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Adds the widget's two Hyprland shortcuts to ~/.config/hypr/bindings.lua:
+#   Super + Alt + P            open the pohunek panel
+#   Super + Shift + Alt + P    start a new session
+# Refuses a key that is already bound, backs the file up, reloads Hyprland and
+# checks for config errors. Running it again changes nothing.
+set -euo pipefail
+
+file="$HOME/.config/hypr/bindings.lua"
+say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+die() { printf '\n\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
+
+[[ -f $file ]] || die "$file not found: is this an Omarchy machine?"
+if grep -q 'pohunek.sessions' "$file"; then
+  say "The pohunek shortcuts are already in $file."
+  grep -n 'pohunek' "$file"
+  exit 0
+fi
+
+bound=$(omarchy menu keybindings --print 2>/dev/null || true)
+for key in "SUPER ALT + P " "SUPER SHIFT ALT + P "; do
+  if grep -qF "$key" <<<"$bound"; then
+    die "$(grep -F "$key" <<<"$bound" | head -1 | sed 's/  */ /g') is taken. Pick other keys and add them by hand:
+  o.bind(\"<keys>\", \"pohunek sessions\", { panel = \"pohunek.sessions\" })"
+  fi
+done
+
+block='
+-- pohunek: agent sessions widget in the bar (github.com/pohunekd/omarchy)
+o.bind("SUPER + ALT + P", "pohunek sessions", { panel = "pohunek.sessions" })
+o.bind("SUPER + SHIFT + ALT + P", "pohunek new session", { ipc = "pohunek.sessions.newSession" })'
+
+say "Adding to $file:"
+echo "$block"
+cp "$file" "$file.bak.$(date +%s)"
+printf '%s\n' "$block" >>"$file"
+hyprctl reload >/dev/null
+errors=$(hyprctl configerrors 2>/dev/null | grep -v '^$' || true)
+if [[ -n $errors ]]; then
+  echo "$errors"
+  die "Hyprland reports config errors; the backup sits next to $file."
+fi
+say "Done: Super + Alt + P opens pohunek."

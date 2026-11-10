@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Rolls pohunek out to your other machines the way Omarchy syncs themes: over
+# SSH, to the machines in your herdr registry (`herdr machine list`, enabled
+# ones) or to the SSH targets you name. On each machine it
+#   1. copies this machine's overlay choice (~/.config/pohunek/overlays.toml),
+#   2. installs or updates this bar widget (omarchy plugin add / update),
+#   3. installs the pohunek daemon (tools/install-pohunek --yes),
+# then lists the pohunek hosts this machine can reach.
+#
+#   distribute                  every enabled herdr machine
+#   distribute laptop me@box    these SSH targets
+#   distribute --list           show the targets and stop
+#   distribute --yes            no confirmation
+#
+# Joining the overlay network needs a login on each machine, so it is never
+# done remotely: the summary says where to run tools/setup-network.
+set -euo pipefail
+
+PLUGIN_ID="pohunek.sessions"
+REPO_URL="${POHUNEK_OMARCHY_URL:-https://github.com/pohunekd/omarchy.git}"
+here=$(cd "$(dirname "$0")" && pwd)
+
+say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+die() { printf '\n\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
+
+targets=()
+list_only=0
+assume_yes=0
+for arg in "$@"; do
+  case $arg in
+  --list) list_only=1 ;;
+  --yes | -y) assume_yes=1 ;;
+  -h | --help) sed -n '2,18p' "$0"; exit 0 ;;
+  -*) die "unknown option: $arg" ;;
+  *) targets+=("$arg") ;;
+  esac
+done
+
+if (( ${#targets[@]} == 0 )); then
+  command -v herdr >/dev/null 2>&1 || die "Name SSH targets, or add machines with: herdr machine add"
+  # Columns: id, label, SSH target, session, state (the same reading as Omarchy's theme sync).
+  mapfile -t targets < <(herdr machine list 2>/dev/null | awk -F '\t' '$5 == "enabled" { print $3 }')
+  (( ${#targets[@]} > 0 )) || die "No enabled herdr machines. Add one with: herdr machine add, or name SSH targets."
+fi
+for t in "${targets[@]}"; do
+  [[ $t =~ ^[A-Za-z0-9._@:-]+$ && $t != -* ]] || die "Not an SSH target: $t"
+done
+
+overlay=$("$here/setup-network" --status)
+say "Targets"
+printf '  %s\n' "${targets[@]}"
+echo "Overlay to copy: $overlay"
+echo "Widget source:   $REPO_URL"
+(( list_only )) && exit 0
+if (( ! assume_yes )); then
+  if command -v gum >/dev/null 2>&1; then gum confirm "Install pohunek and the widget on these machines?" || exit 130
+  else read -r -p "Install pohunek and the widget on these machines? [y/N] " a; [[ $a == [yY]* ]] || exit 130; fi
+fi
+
+control_dir="${XDG_RUNTIME_DIR:-/tmp}/pohunek-distribute"
+mkdir -m 700 -p "$control_dir"
+remote() {
+  local target=$1; shift
+  timeout 900 ssh -T -o BatchMode=yes -o ConnectTimeout=8 \
+    -o ControlMaster=auto -o ControlPersist=600 -o "ControlPath=$control_dir/%C" \
+    "$target" "$@"
+}
+
+# Runs on the remote machine in a login shell. SSH carries no desktop session,
+# so the shell's environment comes from the live Hyprland instance, like
+# Omarchy's theme sync. Values arrive as quoted assignments on stdin.
+read -r -d '' REMOTE <<'EOF' || true
+{
+  set -uo pipefail
+  step() { printf 'STEP %s\n' "$*"; }
+  export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+  instance=$(hyprctl instances -j 2>/dev/null | jq -r 'max_by(.time) // empty | "\(.instance) \(.wl_socket)"' 2>/dev/null)
+  if [[ -n $instance ]]; then
+    read -r HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY <<<"$instance"
+    export HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY
+  fi
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+
+  dir="${XDG_CONFIG_HOME:-$HOME/.config}/pohunek"
+  if [[ -n $overlays_toml ]]; then
+    mkdir -p "$dir" && chmod 700 "$dir"
+    printf '%s' "$overlays_toml" >"$dir/overlays.toml" && chmod 600 "$dir/overlays.toml"
+    step "overlay: $overlay"
+  else
+    step "overlay: $overlay (default)"
+  fi
+
+  plugin_dir="$HOME/.config/omarchy/plugins/$plugin_id"
+  if command -v omarchy >/dev/null 2>&1; then
+    if [[ -d $plugin_dir/.git ]]; then
+      omarchy plugin update "$plugin_id" --yes >/dev/null 2>&1 && step "widget: updated" || step "widget: update failed"
+    elif omarchy plugin list --json 2>/dev/null | jq -e --arg id "$plugin_id" 'any(.[]; .id == $id)' >/dev/null; then
+      step "widget: already installed (not from git, left alone)"
+    else
+      omarchy plugin add "$repo_url" --enable --yes >/dev/null 2>&1 && step "widget: installed" || step "widget: install failed"
+    fi
+  else
+    step "widget: skipped (not an Omarchy machine)"
+  fi
+
+  if [[ -x $plugin_dir/tools/install-pohunek ]]; then
+    "$plugin_dir/tools/install-pohunek" --yes >/tmp/pohunek-install.log 2>&1 && step "pohunek: ready" || step "pohunek: install failed, see /tmp/pohunek-install.log"
+  else
+    step "pohunek: no installer (widget missing)"
+  fi
+  export PATH="$HOME/.local/bin:$PATH"
+  command -v pohunek >/dev/null 2>&1 && step "version: $(pohunek --version 2>/dev/null)"
+
+  case $overlay in
+  netbird) netbird status --json 2>/dev/null | jq -e '.management.connected == true' >/dev/null 2>&1 && step "network: joined" || step "network: NOT joined" ;;
+  tailscale) tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1 && step "network: joined" || step "network: NOT joined" ;;
+  esac
+} </dev/null
+EOF
+
+config="${XDG_CONFIG_HOME:-$HOME/.config}/pohunek/overlays.toml"
+overlays_toml=""
+[[ -f $config ]] && overlays_toml=$(cat "$config")
+
+declare -A needs_network=()
+for target in "${targets[@]}"; do
+  say "$target"
+  if ! output=$(printf 'overlay=%q overlays_toml=%q plugin_id=%q repo_url=%q\n%s\n' \
+      "$overlay" "$overlays_toml" "$PLUGIN_ID" "$REPO_URL" "$REMOTE" | remote "$target" bash -l -s 2>&1); then
+    echo "  unreachable over SSH"
+    continue
+  fi
+  grep '^STEP ' <<<"$output" | sed 's/^STEP /  /'
+  grep -q 'network: NOT joined' <<<"$output" && needs_network[$target]=1
+done
+
+if (( ${#needs_network[@]} > 0 )); then
+  say "Join the $overlay network on these machines (it needs a login there):"
+  for t in "${!needs_network[@]}"; do
+    echo "  ssh -t $t '~/.config/omarchy/plugins/$PLUGIN_ID/tools/setup-network $overlay'"
+  done
+fi
+
+if command -v pohunek >/dev/null 2>&1; then
+  say "pohunek hosts reachable from here"
+  pohunek host discover --refresh --json 2>/dev/null |
+    jq -r '.ok[] | select(.classification == "reachable_daemon") | "  \(.name)  \(.address)\(if .local then "  (this machine)" else "" end)"' || true
+fi
