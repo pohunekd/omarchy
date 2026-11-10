@@ -17,6 +17,16 @@ function urlsOf(srcset: string): string[] {
 /** Subresources a browser fetches on load. Plain `<a href>` links are navigation, not requests. */
 export function externalRequests(html: string): string[] {
 	const found: string[] = [];
+	// Any element can pull a resource through an inline style.
+	for (const m of html.matchAll(/<[a-z][^>]*>/gi)) {
+		const style = attrs(m[0]).style;
+		if (style) found.push(...cssExternal(style.replace(/&(?:quot|#34);/gi, '"').replace(/&(?:apos|#39);/gi, "'")));
+	}
+	// SVG <image>/<use>/<feImage> reference resources through href or xlink:href.
+	for (const m of html.matchAll(/<(image|use|feimage)\b[^>]*>/gi)) {
+		const a = attrs(m[0]);
+		for (const c of [a.href, a['xlink:href']]) if (c && EXTERNAL.test(c)) found.push(`svg ${m[1].toLowerCase()}: ${c}`);
+	}
 	for (const m of html.matchAll(/<(img|source|script|link|iframe|video|audio|embed|object|track|input)\b[^>]*>/gi)) {
 		const tag = m[1].toLowerCase();
 		const a = attrs(m[0]);
@@ -25,7 +35,7 @@ export function externalRequests(html: string): string[] {
 		if (a.srcset) candidates.push(...urlsOf(a.srcset));
 		if (a.data) candidates.push(a.data);
 		if (a.poster) candidates.push(a.poster);
-		if (tag === 'link' && a.href && /\b(stylesheet|icon|preload|prefetch|modulepreload|manifest)\b/i.test(a.rel ?? '')) {
+		if (tag === 'link' && a.href && /\b(stylesheet|icon|preload|prefetch|modulepreload|manifest|preconnect|dns-prefetch)\b/i.test(a.rel ?? '')) {
 			candidates.push(a.href);
 		}
 		for (const c of candidates) if (EXTERNAL.test(c)) found.push(`${tag}: ${c}`);

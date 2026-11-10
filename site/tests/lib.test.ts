@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { cssExternal, externalRequests, hasLang, imagesWithoutAlt, scriptNetworkUse } from '../src/lib/dist-check';
-import { latestRelease } from '../src/lib/facts';
+import { readFacts, releaseDate, versionOfTag } from '../src/lib/facts';
 
 describe('dist-check', () => {
 	test('flags subresources that leave the origin, not plain links', () => {
@@ -16,6 +16,14 @@ describe('dist-check', () => {
 		expect(externalRequests('<style>a{background:url(https://x.example/a.png)}</style>')).toHaveLength(1);
 		expect(cssExternal('@import "https://x.example/a.css"; b{src:url(./f.woff2)}')).toHaveLength(1);
 	});
+	test('flags requests hidden in inline styles, hints and SVG images', () => {
+		const found = externalRequests(`<div style="background:url('https://x.example/a.png')"></div>
+			<p style="background-image: url(&quot;//y.example/b.png&quot;)"></p>
+			<link rel="preconnect" href="https://fonts.example"><link rel="dns-prefetch" href="//fonts.example">
+			<svg><image href="https://z.example/c.png"/><image xlink:href="//z.example/d.png"/><use href="#local"/></svg>`);
+		expect(found).toHaveLength(6);
+		expect(externalRequests('<div style="color:red"></div><svg><image href="/a.png"/></svg>')).toEqual([]);
+	});
 	test('flags network use in scripts', () => {
 		expect(scriptNetworkUse('fetch("/x")')).toContain('fetch()');
 		expect(scriptNetworkUse('const a=1')).toEqual([]);
@@ -28,12 +36,19 @@ describe('dist-check', () => {
 });
 
 describe('facts', () => {
-	test('reads the newest changelog heading', () => {
-		expect(latestRelease('# Changelog\n\n## 0.4.0 - 2026-12-01\n\n## 0.3.0 - 2026-11-10\n')).toEqual({
-			version: '0.4.0',
-			date: '2026-12-01',
-		});
-		expect(latestRelease('# Changelog')).toBeNull();
+	test('finds the date of the published version, not just the newest heading', () => {
+		const log = '# Changelog\n\n## 0.4.0 - 2026-12-01\n\n## 0.3.0 - 2026-11-10\n';
+		expect(releaseDate(log, '0.3.0')).toBe('2026-11-10');
+		expect(releaseDate('## 0x3x0 - 2026-11-10\n', '0.3.0')).toBeNull();
+		expect(releaseDate('# Changelog', '0.3.0')).toBeNull();
+	});
+	test('takes the published release, and refuses to guess without one', () => {
+		expect(versionOfTag('v1.2.3')).toBe('1.2.3');
+		for (const bad of ['1.2.3', 'v1.2', 'v1.2.3-rc1', '', null]) expect(() => versionOfTag(bad)).toThrow();
+		expect(() => readFacts('')).toThrow('SITE_RELEASE_VERSION');
+		expect(readFacts('0.3.0').version).toBe('0.3.0');
+		expect(readFacts('99.0.0').released).toBeNull();
+		expect(readFacts('0.3.0').released).toBe('2026-11-10');
 	});
 });
 

@@ -79,6 +79,12 @@ jobs:
           bun-version-file: site/.bun-version
       - run: bun install --frozen-lockfile
       - run: bun test
+      - name: Read the latest published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(bun scripts/latest-release.ts)"
+          echo "SITE_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
       - run: bun run build
 
   ci:

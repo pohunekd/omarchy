@@ -69,10 +69,8 @@ const verify = [
 		<Tile kind="term" title="pohunek - panel" class="demo" labelledby="demo-h">
 			<h2 id="demo-h" class="mono-h"><span class="prompt" aria-hidden="true">&gt;</span> The panel in the bar</h2>
 			<figure class="shot shot--demo">
-				<picture>
-					<source media="(prefers-reduced-motion: reduce)" srcset={listShot.src} />
-					<img src={demo.src} width={demo.width} height={demo.height} alt="The panel cycling through the session list, a row's actions, the new session form, the By state view and the help page" />
-				</picture>
+				<img class="demo-anim" src={demo.src} width={demo.width} height={demo.height} loading="lazy" alt="The panel cycling through the session list, a row's actions, the new session form, the By state view and the help page" />
+				<img class="demo-still" src={listShot.src} width={listShot.width} height={listShot.height} loading="lazy" alt="The panel in My groups view: two sessions that need you on top, then the Inbox and Dependencies groups with working and idle sessions." />
 			</figure>
 		</Tile>
 

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Fails when the git index tracks a symlink (mode 120000). `omarchy plugin
+# validate` rejects a plugin folder with any symlink, and a clone contains only
+# tracked files, so untracked package-manager output (links in node_modules)
+# is not a concern. Usage: check-symlinks [repository-directory]
+set -euo pipefail
+
+repo="${1:-$(dirname "${BASH_SOURCE[0]}")/..}"
+
+links="$(git -C "$repo" ls-files -s -z | tr '\0' '\n' | awk -F'\t' 'substr($1, 1, 6) == "120000" { print $2 }')"
+if [ -n "$links" ]; then
+  echo "tracked symlink in the plugin folder:" >&2
+  echo "$links" >&2
+  exit 1
+fi

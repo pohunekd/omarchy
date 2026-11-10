@@ -706,7 +706,7 @@ kbd {
 }
 .crt--install .cmd-cursor {
 	display: inline-block;
-	animation: blink 1.1s steps(1) 6;
+	animation: blink 1.1s steps(1) 4;
 }
 @keyframes blink {
 	50% {
@@ -808,6 +808,19 @@ kbd {
 }
 .shot--demo img {
 	width: min(100%, 20rem);
+}
+/* Both images are lazy, so the hidden one is never fetched. The animated GIF
+   cannot be paused by CSS, so reduced motion shows the still instead. */
+.shot--demo .demo-still {
+	display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+	.shot--demo .demo-anim {
+		display: none;
+	}
+	.shot--demo .demo-still {
+		display: block;
+	}
 }
 .shot--bar {
 	margin: 0.9rem 0;
@@ -927,7 +940,7 @@ kbd {
 	color: transparent;
 }
 .plate-cursor--needs {
-	animation: blink 1.1s steps(1) infinite;
+	animation: blink 1.1s steps(1) 4;
 }
 
 /* why */

@@ -8,7 +8,7 @@
 2. `fetch`: `fetch.py` against `tools/demo-pohunek`, then the model test on the
    snapshot
 3. `manifest`: `tests/manifest_check.py`
-4. `symlinks`: no symlink in the tree
+4. `symlinks`: no tracked symlink (git mode 120000); `tests/symlinks_test.py` covers it
 5. `shell`: `bash -n` and `shellcheck` on the bash scripts
 6. `changelog`: `scripts/changelog check`
 7. `changelog-tests`: `tests/changelog_test.py`
