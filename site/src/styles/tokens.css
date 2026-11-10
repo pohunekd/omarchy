@@ -1,0 +1,47 @@
+/*
+ * Static tokens of the "Engraved tiling" system (see ../../DESIGN.md).
+ * The pohunek layer below is constant: parchment, ink, leather, phosphor and
+ * amber from pohunek.dev's tokens.css (light values). The switchable Omarchy
+ * layer (--wall, --bg, --fg, --accent, ...) is generated from
+ * src/config/themes.ts and inlined in the document head.
+ */
+:root {
+	--font-display: 'Domine', 'Georgia', serif;
+	--font-body: 'Karla', system-ui, sans-serif;
+	--font-mono: 'JetBrains Mono', ui-monospace, 'DejaVu Sans Mono', monospace;
+
+	/* pohunek: parchment and ink */
+	--paper: #fcf9f2;
+	--paper-raised: #f6f3ec;
+	--paper-sunk: #f0eee7;
+	--ink: #1c1c18;
+	--ink-strong: #140b05;
+	--ink-muted: #4d453f;
+	--rule: #d0c4bc;
+	--rule-strong: #7f756e;
+	--leather: #775935;
+	--leather-strong: #5d4120;
+	--button-bg: #2b2118;
+	--button-ink: #fcf9f2;
+	--plate: #efe6d2;
+
+	/* pohunek: CRT void, phosphor, amber ("needs you") */
+	--crt-bezel: #1b1a17;
+	--crt-screen: #131210;
+	--crt-rule: #3a362f;
+	--crt-ink: #e9e4d8;
+	--crt-muted: #9b9282;
+	--phosphor: #7dda91;
+	--amber: #e7c094;
+	--amber-ink: #8f5400;
+
+	/* Omarchy geometry: Hyprland defaults (rounding 0, 2px border, gaps 5px inner and 10px outer) */
+	--border: 2px;
+	--gap-in: 5px;
+	--gap-out: 10px;
+	--bar-h: 2.25rem;
+	--titlebar-h: 1.55rem;
+	--desk-max: 1680px;
+
+	--motion: 180ms;
+}

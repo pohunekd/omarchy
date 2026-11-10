@@ -1,0 +1,22 @@
+Third-party material in site/
+
+Theme palettes (src/config/themes.ts)
+  Colour values of the tokyo-night, gruvbox, everforest, catppuccin, rose-pine
+  and flexoki-light Omarchy themes, copied from themes/<name>/colors.toml in
+  https://github.com/basecamp/omarchy
+  Copyright (c) David Heinemeier Hansson, MIT License.
+  The original theme names belong to their respective palette authors.
+
+pohunek design tokens (src/styles/tokens.css, DESIGN.md)
+  Colours and type roles of the "Engraver & Phosphor" system of pohunek.dev
+  (https://pohunek.dev), the same project and owner as this repository.
+
+Engravings (src/assets/engravings/)
+  Brand artwork of the pohunek project, taken from the pohunek.dev site, resized
+  and re-encoded as WebP.
+
+Fonts (installed from Fontsource, self-hosted, SIL Open Font License 1.1)
+  JetBrains Mono, Domine, Karla.
+
+Omarchy and Basecamp logos and wordmark fonts are not used. This site is not
+affiliated with Omarchy or Basecamp.

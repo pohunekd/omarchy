@@ -57,9 +57,33 @@ jobs:
           NO_CHANGELOG: ${{ contains(github.event.pull_request.labels.*.name, 'no-changelog') }}
         run: scripts/require-fragment
 
+  # The landing page in site/: unit tests (WCAG AA over every theme), the Astro
+  # build, and the post-build check for external requests and missing alt text.
+  site:
+    name: site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The astro CLI runs on Node and needs a newer release than the runner image ships.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: site/.node-version
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: site/.bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun test
+      - run: bun run build
+
   ci:
     name: ci
-    needs: [gates, changelog]
+    needs: [gates, changelog, site]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

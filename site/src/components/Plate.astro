@@ -1,0 +1,9 @@
+---
+/** The pohunek bar icon drawn at text size: a plate with the `>_` prompt cut out; only the cursor carries the state. */
+interface Props {
+	state: 'needs' | 'bad' | 'ok' | 'quiet';
+	label: string;
+}
+const { state, label } = Astro.props;
+---
+<span class="plate" role="img" aria-label={`${label} cursor`}><span class="plate-in"><span class="plate-prompt">&gt;</span><span class:list={['plate-cursor', `plate-cursor--${state}`]}>_</span></span></span>

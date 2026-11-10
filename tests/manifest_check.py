@@ -88,10 +88,18 @@ def check_manifest(folder):
             fail(f"kind '{kind}' requires an 'entryPoints.{entry_point}' to load")
 
 
+# Untracked dependency and build output of site/: never in a clone or the archive.
+# Package managers link executables there, so it is skipped; develop site/ in a
+# worktree, never inside the installed plugin folder.
+SITE_UNTRACKED = ("node_modules", "dist", ".astro")
+
+
 def check_no_symlinks(folder):
     for current, directories, files in os.walk(folder):
         if ".git" in directories:
             directories.remove(".git")
+        if Path(current) == folder / "site":
+            directories[:] = [d for d in directories if d not in SITE_UNTRACKED]
         for name in directories + files:
             path = Path(current) / name
             if path.is_symlink():

@@ -1,0 +1,253 @@
+---
+import { Image } from 'astro:assets';
+import Base from '../layouts/Base.astro';
+import Bar from '../components/Bar.astro';
+import Tile from '../components/Tile.astro';
+import Plate from '../components/Plate.astro';
+import Keys from '../components/Keys.astro';
+import CopyLine from '../components/CopyLine.astro';
+import demo from '../generated/demo.gif';
+import barShot from '../generated/bar.png';
+import logo from '../generated/pohunek-app.png';
+import listShot from '../generated/list.png';
+import stateShot from '../generated/state.png';
+import actionsShot from '../generated/actions.png';
+import newShot from '../generated/new.png';
+import helpShot from '../generated/help.png';
+import hostsShot from '../generated/hosts.png';
+import heroField from '../assets/engravings/hero-field.webp';
+import signpost from '../assets/engravings/signpost.webp';
+import crate from '../assets/engravings/sealed-crate.webp';
+import { readFacts } from '../lib/facts';
+import { inlineCode } from '../lib/text';
+import {
+	BAR_MOUSE, CURSORS, HOSTS, INSTALL_COMMAND, KEYS_ATTACHED, KEYS_OMARCHY, KEYS_PANEL, NOT_AFFILIATED,
+	OVERLAYS, REPO, SAFE, TOUR, WHY,
+} from '../content';
+
+const facts = readFacts();
+const archive = `pohunek-omarchy-${facts.version}-noarch.tar.gz`;
+const shots = { list: listShot, state: stateShot, actions: actionsShot, new: newShot, help: helpShot, hosts: hostsShot };
+const verify = [
+	`gh release download v${facts.version} --repo pohunekd/omarchy --dir release`,
+	'cd release',
+	`sha256sum -c ${archive}.sha256`,
+	`gh attestation verify ${archive} --repo pohunekd/omarchy`,
+];
+---
+<Base
+	title="pohunek for Omarchy: every coding agent on every machine, in your bar"
+	description="An Omarchy bar widget that shows every pohunek agent session on every machine: who is working, who is waiting for you, and a real terminal on any of them in one click."
+>
+	<a class="skip" href="#main">Skip to content</a>
+	<Bar />
+	<main id="main" class="desk">
+		<!-- workspace 1: overview -->
+		<Tile kind="paper" title="pohunek - overview" id="top" class="hero" labelledby="hero-h" data-ws-section="top">
+			<p class="eyebrow"><span class="sect" aria-hidden="true">&sect; 1</span> pohunek for Omarchy</p>
+			<h1 id="hero-h" class="display">Every coding agent on every machine, one keypress away in your Omarchy bar.</h1>
+			<p class="lede">Who is working, who is stuck waiting for you, and a real terminal on any of them in one click.</p>
+			<div class="crt crt--install">
+				<div class="crt-bar" aria-hidden="true"><span>bash - install</span><span>READ-ONLY</span></div>
+				<div class="crt-screen">
+					<CopyLine command={INSTALL_COMMAND} typed label="Copy the install command" />
+					<p class="crt-note">That is the whole install.</p>
+				</div>
+			</div>
+			<p class="cta">
+				<a class="seal" href={REPO}>Source on GitHub</a>
+				<a class="etched" href="https://pohunek.dev">pohunek.dev</a>
+				<a class="etched" href={`${REPO}/releases`}>v{facts.version}</a>
+			</p>
+			<figure class="engraving">
+				<Image src={heroField} alt="Engraving of a farmhand with a whip driving three harnessed server cabinets labelled codex, claude and hermes across a field." width={1000} loading="eager" />
+				<figcaption>fig. 1 &mdash; one farmhand, every machine</figcaption>
+			</figure>
+		</Tile>
+
+		<Tile kind="term" title="pohunek - panel" class="demo" labelledby="demo-h">
+			<h2 id="demo-h" class="mono-h"><span class="prompt" aria-hidden="true">&gt;</span> The panel in the bar</h2>
+			<figure class="shot shot--demo">
+				<picture>
+					<source media="(prefers-reduced-motion: reduce)" srcset={listShot.src} />
+					<img src={demo.src} width={demo.width} height={demo.height} alt="The panel cycling through the session list, a row's actions, the new session form, the By state view and the help page" />
+				</picture>
+			</figure>
+		</Tile>
+
+		<Tile kind="term" title="pohunek - bar" id="bar" class="states" labelledby="bar-h">
+			<h2 id="bar-h" class="mono-h"><span class="prompt" aria-hidden="true">&gt;</span> The bar icon</h2>
+			<p class="muted">The pohunek plate with its <code>&gt;_</code> prompt cut out. Only the cursor carries the state:</p>
+			<figure class="shot shot--bar">
+				<img src={barShot.src} width={barShot.width} height={barShot.height} alt="The bar with the pohunek icon: a cream plate with a cut-out prompt whose cursor is amber, and the number 2" />
+			</figure>
+			<table class="ledger states-table">
+				<caption class="sr-only">Cursor colours of the bar icon</caption>
+				<thead><tr><th scope="col">Cursor</th><th scope="col">Means</th></tr></thead>
+				<tbody>
+					{CURSORS.map((c) => (
+						<tr>
+							<td class="state-cell"><Plate state={c.state} label={c.label} /><span class:list={['state-name', `state-name--${c.state}`]}>{c.label}</span></td>
+							<td>{c.meaning}</td>
+						</tr>
+					))}
+				</tbody>
+			</table>
+			<ul class="mouse">
+				{BAR_MOUSE.map((m) => <li><kbd>{m.action}</kbd> {m.does}</li>)}
+			</ul>
+		</Tile>
+
+		<Tile kind="paper" title="pohunek - why" class="why" labelledby="why-h">
+			<h2 id="why-h" class="display display--s">Why</h2>
+			<p class="lede lede--s">You run Claude Code in one terminal, Codex on the build box, another agent on the laptop. One of them has been waiting ten minutes for you to approve a command and you have no idea which. <a href="https://pohunek.dev">pohunek</a> keeps every agent session alive in a durable terminal on its own machine and knows when one needs you. This widget puts all of it in the bar you already look at.</p>
+			<ol class="why-list">
+				{WHY.map((w, i) => (
+					<li class:list={['why-item', { 'why-item--signal': w.signal }]}>
+						<span class="sect" aria-hidden="true">&sect; {i + 1}</span>
+						<h3>{w.title}</h3>
+						<p set:html={inlineCode(w.text)} />
+					</li>
+				))}
+			</ol>
+		</Tile>
+
+		<!-- workspace 2: tour -->
+		<section id="tour" class="tour" aria-labelledby="tour-h" data-ws-section="tour">
+			<h2 id="tour-h" class="sr-only">A tour</h2>
+			{TOUR.map((t) => {
+				const shot = shots[t.shot];
+				return (
+					<Tile kind="split" title={t.window} class="tour-tile">
+						<figure class="tour-shot"><img src={shot.src} width={shot.width} height={shot.height} alt={t.alt} loading="lazy" /></figure>
+						<div class="plate-label"><h3>{t.name}</h3><p>{t.text}</p></div>
+					</Tile>
+				);
+			})}
+		</section>
+
+		<!-- workspace 3: install -->
+		<section id="install" class="install" aria-labelledby="install-h" data-ws-section="install">
+			<Tile kind="paper" title="pohunek - install" class="install-main" labelledby="install-h">
+				<div class="install-text">
+				<p class="eyebrow"><span class="sect" aria-hidden="true">&sect; 3</span> Install</p>
+				<h2 id="install-h" class="display display--m">One command, then one click.</h2>
+				<div class="crt">
+					<div class="crt-bar" aria-hidden="true"><span>bash</span><span>PID 0003</span></div>
+					<div class="crt-screen"><CopyLine command={INSTALL_COMMAND} label="Copy the install command" /></div>
+				</div>
+				<p>No pohunek on the machine yet? The panel offers <strong>Install pohunek</strong>: it fetches the latest release, verifies it, shows what will be written where, and asks once.</p>
+				</div>
+				<figure class="engraving engraving--crate">
+					<Image src={crate} alt="Engraving of a farmhand with a crowbar and a girl with a magnifying glass inspecting a wooden crate closed with a wax seal." width={1000} loading="lazy" />
+					<figcaption>fig. 2 &mdash; verify the seal before you open the crate</figcaption>
+				</figure>
+			</Tile>
+			<Tile kind="term" title="bash - verify" class="install-verify" labelledby="verify-h">
+				<h3 id="verify-h" class="mono-h"><span class="prompt" aria-hidden="true">&gt;</span> Pinned and verifiable</h3>
+				<p>Users install from the default branch; each release also ships <code>{archive}</code> with its <code>.sha256</code>, both carrying a GitHub build attestation, for pinned and manual installs.</p>
+				<div class="crt crt--theme">
+					<div class="crt-screen">
+						{verify.map((line) => <CopyLine command={line} label={`Copy: ${line}`} />)}
+					</div>
+				</div>
+				<p class="muted">Release v{facts.version}{facts.released ? `, ${facts.released}` : ''}. Changelog in the <a href={`${REPO}/blob/main/CHANGELOG.md`}>repository</a>.</p>
+			</Tile>
+		</section>
+
+		<!-- workspace 4: keys -->
+		<section id="keys" class="keys-row" aria-labelledby="keys-h" data-ws-section="keys">
+			<h2 id="keys-h" class="sr-only">Controls</h2>
+			<Tile kind="term" title="Omarchy - bindings" class="keys-omarchy" labelledby="k1-h">
+				<h3 id="k1-h" class="mono-h"><span class="prompt" aria-hidden="true">&gt;</span> Omarchy</h3>
+				<Keys rows={KEYS_OMARCHY} caption="Omarchy key bindings" />
+				<p class="muted">Add both with one click: <strong>Help &rarr; Add these shortcuts to Hyprland</strong>, or run <code>tools/add-shortcuts</code>. It refuses keys that are already taken, backs up <code>bindings.lua</code> and checks Hyprland for config errors.</p>
+			</Tile>
+			<Tile kind="term" title="pohunek - attach" class="keys-attached" labelledby="k2-h">
+				<h3 id="k2-h" class="mono-h"><span class="prompt" aria-hidden="true">&gt;</span> Inside an attached terminal</h3>
+				<p class="muted">These are pohunek&rsquo;s keys, not the agent&rsquo;s. Most people never find them.</p>
+				<Keys rows={KEYS_ATTACHED} caption="Keys inside an attached terminal" />
+			</Tile>
+			<Tile kind="term" title="pohunek - panel keys" class="keys-panel" labelledby="k3-h">
+				<h3 id="k3-h" class="mono-h"><span class="prompt" aria-hidden="true">&gt;</span> In the panel</h3>
+				<Keys rows={KEYS_PANEL} caption="Keys in the panel" />
+				<p class="muted">Everything works with the mouse as well.</p>
+			</Tile>
+		</section>
+
+		<!-- workspace 5: hosts -->
+		<section id="hosts" class="hosts" aria-labelledby="hosts-h" data-ws-section="hosts">
+			<Tile kind="term" title="pohunek - hosts" class="hosts-main" labelledby="hosts-h">
+				<h2 id="hosts-h" class="mono-h"><span class="prompt" aria-hidden="true">&gt;</span> Your machines: NetBird and Tailscale</h2>
+				<p>pohunek has no server and no cloud. Each machine runs its own daemon, and the machines talk directly over your overlay network: <strong>NetBird</strong> (pohunek&rsquo;s default) or <strong>Tailscale</strong> (built into Omarchy, with its own bar widget and Taildrop). Your agents never leave machines you own.</p>
+				<figure class="net" role="img" aria-label="The Omarchy bar widget reaches the daemon on workstation over a unix socket, and the daemons on buildbox and laptop over NetBird or Tailscale. Each daemon runs its agents: claude and codex, codex and claude, claude.">
+					<div class="net-src" aria-hidden="true"><strong>Omarchy bar</strong><span>pohunek widget</span></div>
+					<div class="net-rows" aria-hidden="true">
+						{HOSTS.map((h) => (
+							<div class="net-row">
+								<span class="net-link"><span>{h.link}</span></span>
+								<span class="net-host"><strong>{h.name}</strong><span>pohunekd</span><span class="net-agents">{h.agents}</span></span>
+							</div>
+						))}
+					</div>
+				</figure>
+				<table class="ledger overlay">
+					<caption class="sr-only">NetBird and Tailscale compared</caption>
+					<thead><tr><th scope="col"><span class="sr-only">Topic</span></th><th scope="col">NetBird</th><th scope="col">Tailscale</th></tr></thead>
+					<tbody>
+						{OVERLAYS.map((o) => <tr><th scope="row">{o.row}</th><td>{o.netbird}</td><td>{o.tailscale}</td></tr>)}
+					</tbody>
+				</table>
+				<p><strong>Set it up in one go:</strong> Hosts &rarr; <em>Set up network</em> (or <code>tools/setup-network</code>) asks NetBird or Tailscale, installs the client, joins the network, writes <code>overlays.toml</code> and restarts the daemon. Live sessions keep running.</p>
+			</Tile>
+			<Tile kind="paper" title="pohunek - signpost" class="hosts-art" labelledby="hosts-art-h">
+				<p class="eyebrow"><span class="sect" aria-hidden="true">&sect; 5</span> Hosts</p>
+				<h3 id="hosts-art-h" class="display display--s">New hosts show up by themselves.</h3>
+				<p>The widget re-probes the network every ten minutes. A machine that drops off keeps its rows, dimmed, until it is back.</p>
+				<figure class="engraving">
+					<Image src={signpost} alt="Engraving of a farmhand at a signpost with a notice board, beside three harnessed server cabinets labelled codex, claude and a third, chained in a row along a road." width={1000} loading="lazy" />
+					<figcaption>fig. 3 &mdash; every road leads to the bar</figcaption>
+				</figure>
+				<p><strong>Roll it out to every machine.</strong> Omarchy keeps your machines in the herdr registry (<code>herdr machine add</code>). The Hosts page lists the ones that do not run pohunek yet, each with <em>Install there</em>, or from a terminal:</p>
+				<div class="crt">
+					<div class="crt-screen">
+						<CopyLine command="tools/distribute" label="Copy: tools/distribute" />
+						<CopyLine command="tools/distribute laptop me@box" label="Copy: tools/distribute laptop me@box" />
+					</div>
+				</div>
+				<p>On each machine, over SSH, it copies your overlay choice, installs or updates this widget, and installs pohunek. Joining the network needs a login there, so it tells you where to run <code>tools/setup-network</code>.</p>
+			</Tile>
+		</section>
+
+		<!-- workspace 6: safe -->
+		<Tile kind="paper" title="pohunek - safe by design" id="safe" class="safe" labelledby="safe-h" data-ws-section="safe">
+			<p class="eyebrow"><span class="sect" aria-hidden="true">&sect; 6</span> Safe by design</p>
+			<h2 id="safe-h" class="display display--m">The widget reads first and asks before it acts.</h2>
+			<ol class="safe-list">
+				{SAFE.map((s) => <li><h3>{s.title}</h3><p set:html={inlineCode(s.text)} /></li>)}
+			</ol>
+		</Tile>
+
+		<footer class="tile tile--paper foot" data-tile>
+			<div class="tile-title" aria-hidden="true"><span>pohunek - about</span><span class="tile-title-dim">sheet</span></div>
+			<div class="tile-body foot-body">
+				<img class="foot-logo" src={logo.src} width="64" height="64" alt="pohunek logo: a farmhand with a whip on a cream plate, a terminal prompt in the corner" />
+				<div class="foot-text">
+					<p>Built on <a href="https://github.com/zajca/pohunek">pohunek</a> and modelled on its <a href="https://pohunek.dev/surfaces/">desktop and Android companions</a>, for <a href="https://omarchy.org">Omarchy</a>. MIT licensed; the logo comes from the pohunek project.</p>
+					<p>{NOT_AFFILIATED}</p>
+					<p>Theme palettes are from the Omarchy themes (<a href="https://github.com/basecamp/omarchy">basecamp/omarchy</a>, MIT). The Hyprland-style window layout is an homage; this page uses no Omarchy or Basecamp logo or typeface.</p>
+				</div>
+				<ul class="foot-links">
+					<li><a href={REPO}>GitHub</a></li>
+					<li><a href={`${REPO}/releases`}>Releases</a></li>
+					<li><a href={`${REPO}/blob/main/CHANGELOG.md`}>Changelog</a></li>
+					<li><a href={`${REPO}/blob/main/README.md#configuration`}>Configuration</a></li>
+					<li><a href="https://pohunek.dev">pohunek.dev</a></li>
+				</ul>
+			</div>
+		</footer>
+	</main>
+	<script>
+		import '../scripts/site.ts';
+	</script>
+</Base>

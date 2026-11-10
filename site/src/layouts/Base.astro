@@ -1,0 +1,36 @@
+---
+import '@fontsource/jetbrains-mono/latin-400.css';
+import '@fontsource/jetbrains-mono/latin-700.css';
+import '@fontsource/domine/latin-700.css';
+import '@fontsource/karla/latin-400.css';
+import '@fontsource/karla/latin-700.css';
+import '../styles/tokens.css';
+import '../styles/site.css';
+import icon from '../generated/pohunek-app.png';
+import { THEMES, themeCss } from '../config/themes';
+import { THEME_STORAGE_KEY } from '../config/site';
+
+interface Props {
+	title: string;
+	description: string;
+}
+const { title, description } = Astro.props;
+const prepaint = `(function(){var d=document.documentElement;d.classList.add('js');try{var t=localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)});if(${JSON.stringify(THEMES.map((t) => t.id))}.indexOf(t)>-1)d.setAttribute('data-theme',t)}catch(e){}})();`;
+---
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>{title}</title>
+		<meta name="description" content={description} />
+		<meta name="color-scheme" content="dark light" />
+		<link rel="icon" type="image/png" href={icon.src} />
+		<link rel="canonical" href={new URL(Astro.url.pathname, Astro.site).href} />
+		<style is:inline set:html={themeCss()}></style>
+		<script is:inline set:html={prepaint}></script>
+	</head>
+	<body>
+		<slot />
+	</body>
+</html>

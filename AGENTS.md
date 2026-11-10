@@ -56,6 +56,7 @@ scripts/gates                  # model, fetch, manifest, symlinks, shell, change
 scripts/changelog check        # validate the changelog fragments (CI runs it too)
 node tests/model.test.js       # Model.js rules
 python3 -I tests/qml_check.py  # offscreen Quickshell check; needs quickshell and the Omarchy shell
+(cd site && bun install --frozen-lockfile && bun test && bun run build)   # landing page, see site/DESIGN.md
 ```
 
 The repository is public: published screenshots, logs, and PR or issue text come

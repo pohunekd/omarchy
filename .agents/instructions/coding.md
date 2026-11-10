@@ -41,6 +41,23 @@
   `site/`, and `tests/` out of the release archive; a new directory that is not
   part of the widget joins that list.
 
+## Site
+
+- `site/` is the landing page (Astro + bun, deployed by `.github/workflows/pages.yml`
+  to omarchy.pohunek.dev). Its design is specified in `site/DESIGN.md`; its copy
+  comes only from `README.md`, `docs/`, `CHANGELOG.md` and `manifest.json`.
+- Zero third-party requests, self-hosted fonts, every image has `alt`, content
+  readable without JS, motion off under `prefers-reduced-motion`.
+  `bun run build` runs `scripts/check-dist.ts`, which fails on a violation.
+- A new theme goes in `site/src/config/themes.ts`; `site/tests/themes.test.ts`
+  checks WCAG AA for every shipped theme.
+- `bun install` links executables into `site/node_modules`, so a clone that
+  holds it fails `omarchy plugin validate`. Work on `site/` in a worktree, never
+  in the installed plugin folder; the gates skip the untracked `site/node_modules`,
+  `site/dist` and `site/.astro`.
+- Do not commit build output. `site/` stays out of the release archive
+  (`.gitattributes`).
+
 ## Shell
 
 - Bash with `set -euo pipefail`, quoted expansions, `shellcheck` clean
