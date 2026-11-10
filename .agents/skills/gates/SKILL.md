@@ -17,7 +17,7 @@ non-zero if any gate failed:
   against `tools/demo-pohunek`, and the model test on that snapshot
 - `manifest`: `tests/manifest_check.py` (plugin manifest schema, entry points,
   en/cs translation parity)
-- `symlinks`: no symlink anywhere in the tree
+- `symlinks`: no tracked symlink (git mode 120000), plus its test
 - `shell`: `bash -n` and `shellcheck` on every bash script under `tools/` and
   `scripts/`
 - `changelog` and `changelog-tests`: `scripts/changelog check` and

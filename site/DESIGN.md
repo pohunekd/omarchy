@@ -72,8 +72,12 @@ clock, copy buttons and the effects above.
 
 ## Content rules
 
-Copy comes from `README.md`, `docs/`, `CHANGELOG.md` and `manifest.json`; the
-version shown is read from `manifest.json` at build time. Screenshots are the
+Copy comes from `README.md`, `docs/` and `CHANGELOG.md`. The version shown is
+the latest published GitHub release, never the version in `manifest.json`: the
+build requires `SITE_RELEASE_VERSION` and fails without it. Produce it with
+`SITE_RELEASE_VERSION=$(bun scripts/latest-release.ts) bun run build` (needs
+an authenticated `gh`); CI and `pages.yml` do the same with the workflow
+token. Screenshots are the
 repository's own (`docs/`, synthetic sessions from `tools/demo-pohunek`),
 copied into `src/generated/` by `scripts/sync-assets.ts`. No third-party
 request is made at runtime; `scripts/check-dist.ts` fails the build otherwise.
