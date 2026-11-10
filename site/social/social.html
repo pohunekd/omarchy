@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en" data-theme="gruvbox">
+<head>
+<meta charset="utf-8" />
+<title>pohunek for Omarchy: social image</title>
+<style>{{THEME_CSS}}</style>
+<style>{{TOKENS_CSS}}</style>
+<style>:root { --w: 1200px; --h: 630px; --screen-bg: #1b1a17; --bar-h: 34px; }</style>
+<link rel="stylesheet" href="art.css" />
+<style>
+.ws { padding-left: 14px; }
+.hero { left: 10px; top: 46px; width: 706px; height: 574px; }
+.hero .tile-body { display: flex; flex-direction: column; justify-content: space-between; padding: 30px 38px 30px; }
+.hero .display { margin-top: 22px; font-size: 50px; max-width: 560px; }
+.hero .lede { margin-top: 26px; max-width: 580px; font-size: 25px; }
+.logo { position: absolute; top: 24px; right: 30px; width: 84px; height: 84px; }
+.hero .crt { align-self: stretch; }
+.panel { left: 721px; top: 46px; width: 469px; height: 574px; }
+.panel .tile-body { background: var(--screen-bg); overflow: hidden; }
+.panel img { position: absolute; left: 0; top: -31px; width: 465px; height: auto; }
+</style>
+</head>
+<body>
+<div class="bar">
+	<div class="ws"><span>1</span><span>2</span><span class="on">3</span><span>4</span><span>5</span></div>
+	<div class="clock">Tue 10 Nov 18:42</div>
+	<img class="bar-shot" src="../../docs/bar.png" alt="" />
+</div>
+<section class="tile paper focus hero">
+	<div class="tile-title"><span>pohunek - overview</span><i>sheet</i></div>
+	<div class="tile-body">
+		<img class="logo" src="../../assets/pohunek-app.png" alt="" />
+		<div>
+			<p class="eyebrow">&sect; pohunek for Omarchy</p>
+			<h1 class="display">Every coding agent on every machine, in your Omarchy bar.</h1>
+			<p class="lede">Who is working, who <span class="needs">needs you</span>, and a real terminal on any of them in one click.</p>
+		</div>
+		<div class="crt">
+			<div class="crt-screen"><span class="prompt">&gt;</span>omarchy.pohunek.dev<span class="cursor"></span></div>
+		</div>
+	</div>
+</section>
+<section class="tile term panel">
+	<div class="tile-title"><span>pohunek - panel</span><i>term</i></div>
+	<div class="tile-body"><img src="../../docs/list.png" alt="" /></div>
+</section>
+</body>
+</html>

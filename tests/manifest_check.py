@@ -119,6 +119,42 @@ def check_translations(folder):
     return len(catalogs)
 
 
+# Marketplace listing files (omacom/omarchy-plugin-marketplace SUBMISSION.md): a
+# root README with install and removal instructions, a root LICENSE and at most
+# one root preview that the release archive keeps.
+PREVIEW_NAMES = ("preview.png", "preview.jpg", "preview.jpeg", "preview.webp", "preview.avif")
+PREVIEW_MAX_BYTES = 1024 * 1024
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def check_listing(folder):
+    for name in ("README.md", "LICENSE"):
+        if not (folder / name).is_file():
+            fail(f"marketplace listing needs a root {name}")
+    readme = (folder / "README.md").read_text(encoding="utf-8")
+    for needle in ("omarchy plugin add", "omarchy plugin remove"):
+        if needle not in readme:
+            fail(f"README.md must document `{needle}`")
+    previews = [name for name in PREVIEW_NAMES if (folder / name).exists()]
+    if len(previews) > 1:
+        fail(f"at most one root preview is allowed: {previews}")
+    for name in previews:
+        path = folder / name
+        if path.stat().st_size > PREVIEW_MAX_BYTES:
+            fail(f"{name} is {path.stat().st_size} bytes, over the {PREVIEW_MAX_BYTES} byte budget")
+        if name.endswith(".png") and not path.read_bytes().startswith(PNG_SIGNATURE):
+            fail(f"{name} is not a PNG")
+    attributes = folder / ".gitattributes"
+    if attributes.is_file():
+        for line in attributes.read_text(encoding="utf-8").splitlines():
+            fields = line.split()
+            if fields and not fields[0].startswith("#") and "export-ignore" in fields[1:]:
+                pattern = fields[0].lstrip("/")
+                if any(Path(name).match(pattern.rstrip("/")) for name in previews + ["README.md", "LICENSE", "manifest.json"]):
+                    fail(f".gitattributes export-ignores a listing file: {fields[0]}")
+    return len(previews)
+
+
 def main(argv):
     if len(argv) > 1:
         fail("usage: manifest_check.py [plugin-folder]")
@@ -128,7 +164,8 @@ def main(argv):
     check_manifest(folder)
     check_no_symlinks(folder)
     catalogs = check_translations(folder)
-    print(f"manifest and {catalogs} translation catalogs ok")
+    previews = check_listing(folder)
+    print(f"manifest, {catalogs} translation catalogs and marketplace listing files ({previews} preview) ok")
 
 
 if __name__ == "__main__":

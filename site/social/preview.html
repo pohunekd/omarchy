@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en" data-theme="gruvbox">
+<head>
+<meta charset="utf-8" />
+<title>pohunek for Omarchy: marketplace preview</title>
+<style>{{THEME_CSS}}</style>
+<style>{{TOKENS_CSS}}</style>
+<style>:root { --w: 1600px; --h: 808px; --screen-bg: #1b1a17; --bar-h: 36px; }</style>
+<link rel="stylesheet" href="art.css" />
+<style>
+.ws { padding-left: 14px; }
+.bar-panel { position: absolute; right: 0; top: 0; width: 536px; height: 798px; }
+.hero { left: 10px; top: 46px; width: 1018px; height: 562px; }
+.hero .tile-body { display: grid; grid-template-columns: 1fr 380px; gap: 34px; padding: 40px 44px; align-items: center; }
+.hero .display { margin-top: 20px; font-size: 52px; }
+.hero .lede { margin-top: 22px; font-size: 24px; }
+.hero figure { align-self: center; }
+.hero figure img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); }
+.hero figcaption { margin-top: 8px; font: 400 12px/1.2 var(--font-mono); color: var(--ink-muted); text-align: center; }
+.install { left: 10px; top: 613px; width: 1018px; height: 185px; }
+.install .tile-body { background: var(--bg); padding: 16px 28px; font: 400 21px/1.5 var(--font-mono); }
+.install .crt { margin-top: 0; }
+.install .crt-screen { font-size: 19px; }
+.install .cmd { color: var(--crt-ink); }
+.install .hint { margin-top: 14px; font-size: 16px; color: var(--fg-muted); }
+.install .hint b { color: var(--needs); font-weight: 700; }
+.install .hint em { font-style: normal; color: var(--ok); }
+</style>
+</head>
+<body>
+<div class="bar">
+	<div class="ws"><span>1</span><span>2</span><span class="on">3</span><span>4</span><span>5</span></div>
+	<div class="clock" style="left: 40%">Tue 10 Nov 18:42</div>
+</div>
+<img class="bar-panel" src="../../docs/list.png" alt="" />
+<section class="tile paper focus hero">
+	<div class="tile-title"><span>pohunek - overview</span><i>sheet</i></div>
+	<div class="tile-body">
+		<div>
+			<p class="eyebrow">&sect; pohunek for Omarchy</p>
+			<h1 class="display">Every coding agent on every machine, one keypress away.</h1>
+			<p class="lede">Sessions that <span class="needs">need you</span> sit on top, from every host. One click attaches a real terminal; the agent keeps working when you detach.</p>
+		</div>
+		<figure><img src="../src/assets/engravings/hero-field.webp" alt="" /><figcaption>fig. 1 &mdash; one farmhand, every machine</figcaption></figure>
+	</div>
+</section>
+<section class="tile term install">
+	<div class="tile-title"><span>bash - install</span><i>term</i></div>
+	<div class="tile-body">
+		<div class="crt"><div class="crt-screen"><span class="prompt">&gt;</span>omarchy plugin add https://github.com/pohunekd/omarchy --enable</div></div>
+		<p class="hint"><b>amber</b> needs you &middot; <em>green</em> working &middot; Claude Code, Codex, Hermes, Pi &middot; omarchy.pohunek.dev</p>
+	</div>
+</section>
+</body>
+</html>

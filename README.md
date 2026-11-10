@@ -29,6 +29,36 @@ That is the whole install. No pohunek on the machine yet? The panel offers
 **Install pohunek**: it fetches the latest release, verifies it, shows what
 will be written where, and asks once.
 
+## Requirements
+
+| Needs | For | Notes |
+|---|---|---|
+| [Omarchy](https://omarchy.org) with the Quattro shell | the plugin host | Quickshell is part of the Omarchy shell; the plugin ships no copy of it |
+| `python3` | `fetch.py`, the session snapshot | standard library only, nothing to `pip install` |
+| the [`pohunek`](https://pohunek.dev) CLI and its daemon | every session, on this machine and on any host you follow | the widget is a client and owns no session state; **Install pohunek** in the panel (or `tools/install-pohunek`) installs it with a checksum and attestation check |
+
+Optional, each used by one feature only: `gh` (verifies the build attestation
+while installing pohunek), `herdr` (the machine list behind **Install there**
+and `tools/distribute`), NetBird or Tailscale (hosts on other machines), `gum`
+(prompts in the tools). Nothing else is downloaded at runtime.
+
+## Remove
+
+```bash
+omarchy plugin remove pohunek.sessions
+```
+
+This disables the widget and deletes the plugin folder (it asks first; add
+`--yes` to skip the question). The plugin never changes
+anything outside that folder on its own; the tools below do so only when you run
+them, and are undone by hand:
+
+| Written by | Where | Undo |
+|---|---|---|
+| **Add these shortcuts to Hyprland** / `tools/add-shortcuts` | `~/.config/hypr/bindings.lua` (a `.bak.<time>` copy is kept) | delete the two `pohunek` lines |
+| **Set up network** / `tools/setup-network` | `~/.config/pohunek/overlays.toml` | restore your previous overlay choice |
+| **Install pohunek** / `tools/install-pohunek` | the pohunek daemon and CLI (a user service) | pohunek is a separate program; see [pohunek.dev](https://pohunek.dev) to remove it |
+
 ---
 
 ## Why
