@@ -1,0 +1,308 @@
+name: Release
+
+# A `vX.Y.Z` tag builds the release archive, attests it and publishes it as a
+# GitHub Release. `workflow_dispatch` (version input) and `pull_request`
+# (release files only) run the same build and upload workflow artifacts; they
+# never attest, tag or release.
+#
+# Jobs:
+#   prepare  resolves the version and requires it to equal manifest.json.
+#   build    runs the gate set (a tag push runs no CI), archives the tagged
+#            tree with `git archive`, writes the checksum, extracts the archive
+#            outside the checkout and validates it, and uploads both files.
+#   body     read-only: composes the release body from the committed
+#            CHANGELOG.md section and fails while fragments remain unfolded.
+#   attest   only job with `id-token`/`attestations: write`; tag pushes only.
+#   publish  only job with `contents: write`; tag pushes only. It creates a
+#            draft with the body from `body` as data, verifies it and publishes.
+#
+# Provenance is checked with
+# `gh attestation verify <archive> --repo pohunekd/omarchy`.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build; must equal the version in manifest.json
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - ".gitattributes"
+      - "manifest.json"
+      - "scripts/changelog"
+      - "scripts/changelog.py"
+      - "scripts/gates"
+      - "changelog.toml"
+      - "CHANGELOG.md"
+      - "changelog.d/**"
+      - "tests/manifest_check.py"
+
+concurrency:
+  group: release-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  ARCHIVE_ARCH: noarch
+
+jobs:
+  prepare:
+    name: Resolve and check the version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve the version and compare it with manifest.json
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          manifest="$(python3 -I -c 'import json; print(json.load(open("manifest.json"))["version"])')"
+          if ! [[ "$manifest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::cannot read a X.Y.Z version from manifest.json (got '$manifest')"
+            exit 1
+          fi
+          case "$EVENT" in
+            push)
+              [ "$REF_TYPE" = tag ] || { echo "::error::push without a tag"; exit 1; }
+              requested="${REF_NAME#v}"
+              ;;
+            workflow_dispatch)
+              requested="$INPUT_VERSION"
+              ;;
+            *)
+              requested="$manifest"
+              ;;
+          esac
+          if ! [[ "$requested" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$requested' is not a X.Y.Z version"
+            exit 1
+          fi
+          if [ "$requested" != "$manifest" ]; then
+            echo "::error::requested version $requested differs from the version $manifest in manifest.json"
+            exit 1
+          fi
+          echo "version=$requested" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build the release archive
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Tool versions
+        run: |
+          node --version
+          python3 --version
+          shellcheck --version
+      - name: Gates
+        run: scripts/gates
+      - name: Archive
+        run: |
+          set -euo pipefail
+          name="pohunek-omarchy-${VERSION}-${ARCHIVE_ARCH}"
+          mkdir -p dist
+          # The archive is the tracked tree of the commit minus the export-ignore
+          # paths; gzip -n and git's commit-time mtimes make a rebuild identical.
+          git archive --format=tar --prefix="pohunek-omarchy-${VERSION}/" HEAD | gzip -n -9 > "dist/$name.tar.gz"
+          git archive --format=tar --prefix="pohunek-omarchy-${VERSION}/" HEAD | gzip -n -9 | cmp - "dist/$name.tar.gz"
+          ( cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256" )
+          ls -l dist
+      - name: Extract outside the checkout and validate
+        run: |
+          set -euo pipefail
+          name="pohunek-omarchy-${VERSION}-${ARCHIVE_ARCH}"
+          root="pohunek-omarchy-${VERSION}"
+          check="$(mktemp -d)"
+          ( cd dist && sha256sum -c "$name.tar.gz.sha256" )
+          if tar -tzf "dist/$name.tar.gz" | grep -v -e "^${root}/" ; then
+            echo "::error::the archive holds entries outside ${root}/"
+            exit 1
+          fi
+          if tar -tvzf "dist/$name.tar.gz" | grep -e '^[lh]'; then
+            echo "::error::the archive holds a link"
+            exit 1
+          fi
+          tar -xzf "dist/$name.tar.gz" -C "$check"
+          for excluded in .github .agents .claude changelog.d site tests; do
+            if [ -e "$check/$root/$excluded" ]; then
+              echo "::error::$excluded must not be in the archive"
+              exit 1
+            fi
+          done
+          for required in manifest.json Panel.qml Service.qml Model.js fetch.py LICENSE README.md i18n/en.json i18n/cs.json; do
+            test -f "$check/$root/$required"
+          done
+          test -z "$(find "$check" -name .git -prune -o -type l -print)"
+          # The checker lives in the checkout (tests/ is not archived) and validates the extracted plugin folder.
+          python3 -I tests/manifest_check.py "$check/$root"
+          extracted="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$check/$root/manifest.json")"
+          test "$extracted" = "$VERSION"
+          find "$check/$root" -type f | wc -l
+      - name: Upload the archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-archive
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # Read-only: the changelog tool runs here, its output is data for publish.
+  body:
+    name: Build the release body
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      EVENT: ${{ github.event_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # A tag must publish a committed section, so a missing section or unfolded
+      # fragments fail here. A dry run of a version without a section folds the
+      # fragments in a scratch copy and shows the body the next release would
+      # publish; the checkout itself is never changed.
+      - name: Render the version section
+        run: |
+          set -euo pipefail
+          tool="$GITHUB_WORKSPACE/scripts/changelog.py"
+          mkdir -p "$RUNNER_TEMP/body"
+          if [ "$EVENT" = push ] || grep -qE "^## ${VERSION//./\\.} - " CHANGELOG.md; then
+            python3 -I "$tool" notes "$VERSION" > "$RUNNER_TEMP/body/changelog.md"
+          else
+            echo "::notice::dry run: folding the unreleased fragments of $VERSION in a scratch copy"
+            scratch="$RUNNER_TEMP/dry-run"
+            mkdir -p "$scratch"
+            cp -R CHANGELOG.md changelog.toml changelog.d "$scratch/"
+            (cd "$scratch" && python3 -I "$tool" fold "$VERSION" >&2 && python3 -I "$tool" notes "$VERSION") > "$RUNNER_TEMP/body/changelog.md"
+          fi
+      # The changelog block comes first; the release's own text follows it after one blank line.
+      - name: Compose the release body
+        run: |
+          set -euo pipefail
+          existing="pohunek for Omarchy ${VERSION}: the widget as an archive of the tagged commit. Install with \`omarchy plugin add https://github.com/${GITHUB_REPOSITORY}\`, or verify the archive with \`sha256sum -c\` and \`gh attestation verify <archive> --repo ${GITHUB_REPOSITORY}\`."
+          { cat "$RUNNER_TEMP/body/changelog.md"; printf '\n%s\n' "$existing"; } > "$RUNNER_TEMP/body/release-body.md"
+          cat "$RUNNER_TEMP/body/release-body.md"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: changelog-body
+          path: ${{ runner.temp }}/body/release-body.md
+          if-no-files-found: error
+          retention-days: 14
+
+  # Checks out nothing: no repository code runs while the OIDC token exists.
+  attest:
+    name: Attest the release assets
+    needs: [build, body]
+    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-archive
+          path: ${{ runner.temp }}/assets
+      - name: Check the checksum
+        run: cd "$RUNNER_TEMP/assets" && for f in ./*.sha256; do sha256sum -c "$f"; done
+      - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            ${{ runner.temp }}/assets/*.tar.gz
+            ${{ runner.temp }}/assets/*.sha256
+
+  # Creates a draft, uploads exactly the archive and its checksum, verifies
+  # names, sizes and digests against the local files, then publishes.
+  publish:
+    name: Publish the release
+    needs: [prepare, build, body, attest]
+    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-archive
+          path: ${{ runner.temp }}/release
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: changelog-body
+          path: ${{ runner.temp }}/changelog-body
+      - name: Check the asset set and the checksum
+        run: |
+          set -euo pipefail
+          name="pohunek-omarchy-${VERSION}-${ARCHIVE_ARCH}"
+          cd "$RUNNER_TEMP/release"
+          test "$(printf '%s\n' * | LC_ALL=C sort)" = "$(printf '%s\n%s\n' "$name.tar.gz" "$name.tar.gz.sha256")"
+          sha256sum -c "$name.tar.gz.sha256"
+      - name: Create the draft and upload the assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A rerun must not add a second draft for the same tag.
+          existing="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id")"
+          if [ -n "$existing" ]; then
+            echo "::error::a release or draft for $TAG already exists"
+            exit 1
+          fi
+          cd "$RUNNER_TEMP/release"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+            --title "$TAG" --notes-file "$RUNNER_TEMP/changelog-body/release-body.md" ./*
+      - name: Verify the draft's assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/release"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[] | "\(.name) \(.size) \(.digest)"' | LC_ALL=C sort > "$RUNNER_TEMP/remote.txt"
+          for f in *; do
+            echo "$f $(stat -c %s "$f") sha256:$(sha256sum "$f" | cut -d' ' -f1)"
+          done | LC_ALL=C sort > "$RUNNER_TEMP/local.txt"
+          diff "$RUNNER_TEMP/local.txt" "$RUNNER_TEMP/remote.txt"
+      - name: Verify the draft's body
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # jq -j writes the body without the newline that gh's --jq adds.
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body > "$RUNNER_TEMP/remote.json"
+          jq -j .body "$RUNNER_TEMP/remote.json" > "$RUNNER_TEMP/remote-body.md"
+          cmp "$RUNNER_TEMP/changelog-body/release-body.md" "$RUNNER_TEMP/remote-body.md"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

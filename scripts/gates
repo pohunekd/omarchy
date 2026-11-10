@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# Runs the repository gate set (the same commands CI runs), records each gate's
+# exit code separately, and exits non-zero when any gate failed. The QML check
+# needs quickshell and the Omarchy shell; without them it is reported as
+# "not run", which is neither a pass nor a failure.
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+scratch="$(mktemp -d)"
+export scratch
+trap 'rm -rf "$scratch"' EXIT
+
+names=()
+codes=()
+
+run_gate() {
+  local name=$1 rc=0
+  shift
+  echo "==> $name"
+  # A separate shell keeps errexit active inside the gate: in an `if` condition
+  # bash would ignore it and only the last command's status would count.
+  if bash -euo pipefail -c '"$@"' gate "$@"; then rc=0; else rc=$?; fi
+  names+=("$name")
+  codes+=("$rc")
+}
+
+# The gate functions are exported and run through `bash -c` by run_gate, so
+# the linter finds no direct call.
+# shellcheck disable=SC2329
+gate_model() {
+  node tests/model.test.js
+}
+
+# shellcheck disable=SC2329
+gate_fetch() {
+  python3 -m py_compile fetch.py tools/demo-pohunek
+  python3 -I fetch.py --bin "$PWD/tools/demo-pohunek" --discover --machines > "$scratch/snapshot.json"
+  node tests/model.test.js "$scratch/snapshot.json"
+}
+
+# shellcheck disable=SC2329
+gate_manifest() {
+  python3 -I tests/manifest_check.py
+}
+
+# shellcheck disable=SC2329
+gate_symlinks() {
+  local link
+  link="$(find . -name .git -prune -o -type l -print -quit)"
+  if [ -n "$link" ]; then
+    echo "symlink in the plugin folder: $link" >&2
+    return 1
+  fi
+}
+
+# Bash scripts under tools/ and scripts/, found by shebang.
+# shellcheck disable=SC2329
+shell_files() {
+  local f
+  for f in tools/* scripts/*; do
+    if [ -f "$f" ] && head -n 1 "$f" | grep -Eq '^#!.*(bash|/sh)( |$)'; then
+      echo "$f"
+    fi
+  done
+}
+
+# shellcheck disable=SC2329
+gate_shell() {
+  local tools=() own=() f
+  while IFS= read -r f; do
+    case "$f" in
+      tools/*) tools+=("$f") ;;
+      *) own+=("$f") ;;
+    esac
+  done < <(shell_files)
+  for f in "${tools[@]}" "${own[@]}"; do bash -n "$f"; done
+  # An absent shellcheck fails the gate with 127; it is never skipped.
+  shellcheck --version
+  # The tools predate the gate: errors only. Scripts of the gate set are held to the default severity.
+  shellcheck -S error "${tools[@]}"
+  shellcheck "${own[@]}"
+}
+
+# shellcheck disable=SC2329
+gate_changelog() {
+  scripts/changelog check
+}
+
+# shellcheck disable=SC2329
+gate_changelog_tests() {
+  python3 -I tests/changelog_test.py
+}
+
+export -f gate_model gate_fetch gate_manifest gate_symlinks shell_files gate_shell gate_changelog gate_changelog_tests
+
+run_gate model gate_model
+run_gate fetch gate_fetch
+run_gate manifest gate_manifest
+run_gate symlinks gate_symlinks
+run_gate shell gate_shell
+run_gate changelog gate_changelog
+run_gate changelog-tests gate_changelog_tests
+
+qml="not run"
+if command -v quickshell > /dev/null 2>&1 && [ -d "${OMARCHY_SHELL:-/usr/share/omarchy/shell}" ]; then
+  run_gate qml python3 -I tests/qml_check.py
+  qml=""
+else
+  echo "==> qml: not run (needs quickshell and the Omarchy shell)"
+fi
+
+failed=0
+echo
+echo "Gate results:"
+for i in "${!names[@]}"; do
+  if [ "${codes[$i]}" -eq 0 ]; then
+    echo "  ${names[$i]}: passed"
+  else
+    echo "  ${names[$i]}: failed (exit ${codes[$i]})"
+    failed=1
+  fi
+done
+if [ -n "$qml" ]; then
+  echo "  qml: $qml"
+fi
+exit "$failed"

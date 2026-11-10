@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Runs the changelog contract tool (scripts/changelog.py) from the repository root.
+#
+# usage: scripts/changelog check
+#        scripts/changelog fold <version> [--surface <name>] [--date YYYY-MM-DD]
+#        scripts/changelog notes <version> [--surface <name>]
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+exec python3 -I scripts/changelog.py "$@"

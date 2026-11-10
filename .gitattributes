@@ -1,0 +1,7 @@
+# Files that stay out of the release archive (git archive honours export-ignore).
+.github/ export-ignore
+.agents/ export-ignore
+.claude/ export-ignore
+changelog.d/ export-ignore
+site/ export-ignore
+tests/ export-ignore

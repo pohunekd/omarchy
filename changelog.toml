@@ -1,0 +1,4 @@
+# Changelog layout of this repository, read by scripts/changelog.py (see
+# .agents/instructions/changelog.md). Single product: one changelog file.
+repository = "pohunekd/omarchy"
+changelog = "CHANGELOG.md"

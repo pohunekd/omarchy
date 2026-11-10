@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Requires a changelog fragment among the files a pull request adds or modifies
+# unless it is labelled no-changelog. Only names the contract accepts as
+# fragments count; a hidden or misnamed file does not.
+#
+# usage: BASE_SHA=<base commit> NO_CHANGELOG=true|false scripts/require-fragment
+set -euo pipefail
+
+base="${BASE_SHA:?BASE_SHA is required}"
+label="${NO_CHANGELOG:?NO_CHANGELOG is required}"
+
+if [ "$label" = "true" ]; then
+  echo "Labelled no-changelog: no fragment required."
+  exit 0
+fi
+added="$(git diff --name-only --diff-filter=AM "$base" HEAD -- 'changelog.d/*.md' \
+  | grep -E '^changelog\.d/[1-9][0-9]*-[a-z0-9]+(-[a-z0-9]+)*\.md$' || true)"
+if [ -z "$added" ]; then
+  echo "::error::add a changelog fragment under changelog.d/ or label the pull request no-changelog"
+  exit 1
+fi
+echo "$added"
