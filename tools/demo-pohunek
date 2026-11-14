@@ -25,6 +25,8 @@ by tests/onboard_test.py:
                           `setup --yes` ran; otherwise the service is present
   DEMO_POHUNEK_NO_HOOKS   1: `setup` does not know `--hooks` (a core before 0.42)
   DEMO_POHUNEK_EXTRA_PROBLEM  1: `setup --yes` also fails a doctor check
+  DEMO_POHUNEK_INSTALL_DIGEST  digest `plugin install|update` reports as
+                          installed instead of the archive's own
 """
 import hashlib, json, os, re, shutil, sys, time
 
@@ -352,7 +354,8 @@ def cmd_plugin_ingest(verb, flags):
         fail("plugin_consent_required", f"repeat with --yes to {verb} the package")
     if verb == "update" and not any(p["package"]["id"] == flags[0] for p in packages()):
         fail("plugin_not_installed", f"{flags[0]} is not installed")
-    entry = add_package(ASSISTANT_ID, archive_version(archive), "sha256:" + actual)
+    reported = os.environ.get("DEMO_POHUNEK_INSTALL_DIGEST") or "sha256:" + actual
+    entry = add_package(ASSISTANT_ID, archive_version(archive), reported)
     # PackageInstallResult, crates/protocol/src/package.rs:371-410.
     env({"status": "installed", "package": entry})
 

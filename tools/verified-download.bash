@@ -23,12 +23,17 @@ VD_ASSISTANT_ID="pohunek.context.assistant"
 VD_ASSISTANT_SIGNER="https://github.com/zajca/pohunek/.github/workflows/plugin-release.yml"
 VD_VERSION_RE='^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$'
 VD_FIXTURES=""
+# The `gh` the attestation and release-notes reads run: `gh` on PATH, or in
+# test mode only the stub POHUNEK_ONBOARD_TEST_GH names.
+VD_GH="gh"
 
 # Test hook: POHUNEK_ONBOARD_TEST_FIXTURES names a local directory that stands
 # in for GitHub (tests/onboard_test.py). Downloads then copy
-# <dir>/<host>/<path> of each URL and `gh` is never called.
+# <dir>/<host>/<path> of each URL. The `gh` on PATH is never called then; a
+# stub executable inside that directory, named by POHUNEK_ONBOARD_TEST_GH,
+# takes its place, or none.
 vd_init() {
-  local tool fixtures=${POHUNEK_ONBOARD_TEST_FIXTURES:-}
+  local tool fixtures=${POHUNEK_ONBOARD_TEST_FIXTURES:-} stub=${POHUNEK_ONBOARD_TEST_GH:-}
   for tool in curl sha256sum jq; do
     command -v "$tool" >/dev/null 2>&1 || { echo "$tool is required." >&2; return 1; }
   done
@@ -38,7 +43,19 @@ vd_init() {
       return 1
     fi
     VD_FIXTURES=$fixtures
+    VD_GH=""
     echo "TEST MODE: release downloads come from $VD_FIXTURES, not GitHub."
+    if [[ -n $stub ]]; then
+      if [[ $stub != "$VD_FIXTURES"/* || $stub == *..* || ! -f $stub || -L $stub || ! -x $stub ]]; then
+        echo "POHUNEK_ONBOARD_TEST_GH must name an executable file inside the fixture directory." >&2
+        return 1
+      fi
+      VD_GH=$stub
+      echo "TEST MODE: gh is the stub $VD_GH."
+    fi
+  elif [[ -n $stub ]]; then
+    echo "POHUNEK_ONBOARD_TEST_GH works only together with POHUNEK_ONBOARD_TEST_FIXTURES." >&2
+    return 1
   fi
   return 0
 }
@@ -75,7 +92,7 @@ vd_sha256() {
 
 # Whether `gh` can check attestations and read release notes.
 vd_gh_ready() {
-  [[ -z $VD_FIXTURES ]] && command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1
+  [[ -n $VD_GH ]] && command -v "$VD_GH" >/dev/null 2>&1 && "$VD_GH" auth status >/dev/null 2>&1
 }
 
 # vd_attest FILE REPO [extra gh args...]: prints the outcome; 1 when the
@@ -84,7 +101,7 @@ vd_attest() {
   local file=$1 repo=$2
   shift 2
   if vd_gh_ready; then
-    gh attestation verify "$file" --repo "$repo" "$@" >/dev/null || return 1
+    "$VD_GH" attestation verify "$file" --repo "$repo" "$@" >/dev/null || return 1
     echo "GitHub build attestation: verified."
   else
     echo "GitHub build attestation: skipped (gh is not signed in)."
@@ -127,7 +144,7 @@ vd_notes_digest() {
   local work=$1 version=$2 body lines
   body="$work/core-notes.txt"
   if vd_gh_ready; then
-    gh release view "v$version" --repo "$VD_CORE_REPO" --json body --jq .body >"$body" || return 1
+    "$VD_GH" release view "v$version" --repo "$VD_CORE_REPO" --json body --jq .body >"$body" || return 1
   else
     vd_get "https://api.github.com/repos/$VD_CORE_REPO/releases/tags/v$version" "$work/core-release.json" 30 || return 1
     jq -r '.body // ""' "$work/core-release.json" >"$body" || return 1

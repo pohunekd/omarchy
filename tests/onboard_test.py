@@ -162,6 +162,39 @@ class Scenario(unittest.TestCase):
     def demo(self):
         return ["--command", str(DEMO)]
 
+    def stub_gh(self, attest_rc=0):
+        """A `gh` stand-in inside the fixtures: signed in, logs its argv, prints
+        the core release notes, and answers `attestation verify` with attest_rc."""
+        notes = json.loads((self.fixtures / f"api.github.com/repos/zajca/pohunek/releases/tags/v{VERSION}").read_text())["body"]
+        (self.fixtures / "gh-notes.txt").write_text(notes)
+        stub = self.fixtures / "gh"
+        stub.write_text(f"""#!/usr/bin/env bash
+printf '%s\\0' "$@" >>'{self.tmp}/gh-calls'
+printf '\\n' >>'{self.tmp}/gh-calls'
+case "$1 $2" in
+"auth status") exit 0 ;;
+"release view") cat '{self.fixtures}/gh-notes.txt'; exit 0 ;;
+"attestation verify") exit {attest_rc} ;;
+esac
+exit 3
+""")
+        stub.chmod(0o755)
+        return {"POHUNEK_ONBOARD_TEST_GH": str(stub)}
+
+    def gh_calls(self):
+        path = self.tmp / "gh-calls"
+        if not path.exists():
+            return []
+        return [line.rstrip("\0").split("\0") for line in path.read_text().split("\n") if line]
+
+    def seed_packages(self, *packages):
+        """Installed packages the fake daemon reports (PackageInfo shape)."""
+        self.state.mkdir(exist_ok=True)
+        (self.state / "packages.json").write_text(json.dumps([
+            {"digest": digest, "package": {"id": "pohunek.context.assistant", "version": version}, "origin": "local",
+             "enabled": enabled, "selected": True, "installed_at_unix_seconds": 1, "referenced": False}
+            for version, digest, enabled in packages]))
+
     # ---------------------------------------------------------------- scenarios
     def test_declining_at_the_one_yes_writes_nothing(self):
         before = self.home_tree()
@@ -207,7 +240,10 @@ class Scenario(unittest.TestCase):
         self.assertIn("onboard.history=no", launch)
         self.assertFalse(any(a.startswith("onboard.grant") for a in launch), "guided mode passes no grant")
         self.assertEqual(rec["session_id"], json.loads((self.state / "sessions.json").read_text())[0]["id"])
-        self.assertIn("do not read agent history", (self.state / "request.txt").read_text())
+        request = (self.state / "request.txt").read_text()
+        self.assertIn("do not read agent history", request)
+        self.assertIn("ask me in this conversation before you run it", request)
+        self.assertIn("never pass --host and never a <host>/<session-id> target", request)
 
     def test_only_ticked_homes_get_hooks(self):
         code, out = self.run_tty(self.demo(), ["y", "n", "y", "y", "y"])
@@ -239,7 +275,8 @@ class Scenario(unittest.TestCase):
     def test_a_core_that_refuses_hooks_is_refused_without_a_fallback(self):
         r = self.run_tool(["--yes", *self.demo()], {"DEMO_POHUNEK_NO_HOOKS": "1"})
         self.assertEqual(r.returncode, 1)
-        self.assertIn("refuses `setup --hooks`", r.stderr)
+        self.assertIn("refuses `setup --dry-run --json --hooks all`", r.stderr)
+        self.assertIn("unexpected argument '--hooks' found", r.stderr, "the core's own message is shown")
         self.assertEqual(self.writes(), [], "never falls back to bare setup --yes")
         self.assert_no_record()
 
@@ -270,6 +307,89 @@ class Scenario(unittest.TestCase):
         self.assertEqual(self.find(["assistant", "setup"]), [])
         self.assertEqual(self.writes(), [])
         self.assert_no_record()
+
+    def test_the_attestation_binds_the_signer_workflow_at_the_release_tag(self):
+        gh = self.stub_gh(attest_rc=0)
+        shutil.rmtree(self.fixtures / "api.github.com")  # the notes come through gh
+        r = self.run_tool(["--yes", *self.demo()], gh)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("GitHub build attestation: verified.", r.stdout)
+        calls = self.gh_calls()
+        self.assertIn(["release", "view", f"v{VERSION}", "--repo", "zajca/pohunek", "--json", "body", "--jq", ".body"], calls)
+        attest = [c for c in calls if c[:2] == ["attestation", "verify"]]
+        self.assertEqual(len(attest), 1, calls)
+        self.assertTrue(attest[0][2].endswith("/" + ASSISTANT), attest[0])
+        self.assertEqual(attest[0][3:], [
+            "--repo", "pohunekd/plugin-assistant",
+            "--cert-identity", f"https://github.com/zajca/pohunek/.github/workflows/plugin-release.yml@refs/tags/v{VERSION}",
+            "--source-ref", f"refs/tags/v{VERSION}"])
+
+    def test_a_failed_attestation_stops_before_any_write(self):
+        r = self.run_tool(["--yes", *self.demo()], self.stub_gh(attest_rc=1))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("Attestation check failed", r.stderr)
+        self.assertTrue(any(c[:2] == ["attestation", "verify"] for c in self.gh_calls()))
+        self.assertEqual(self.writes(), [])
+        self.assert_no_record()
+
+    def test_a_stub_gh_outside_the_fixtures_is_refused(self):
+        outside = self.tmp / "gh"
+        outside.write_text("#!/usr/bin/env bash\nexit 0\n")
+        outside.chmod(0o755)
+        r = self.run_tool(["--yes", *self.demo()], {"POHUNEK_ONBOARD_TEST_GH": str(outside)})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("POHUNEK_ONBOARD_TEST_GH must name", r.stderr)
+        self.assertEqual(self.argvs(), [])
+
+    def test_an_older_installed_package_is_updated(self):
+        self.seed_packages(("0.41.0", "sha256:" + "41" * 32, True))
+        r = self.run_tool(["--yes", *self.demo()])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("plugin update   pohunek.context.assistant to 0.42.0", r.stdout)
+        self.assertEqual(self.find(["plugin", "install"]), [])
+        update = self.find(["plugin", "update"])
+        self.assertEqual(len(update), 1)
+        self.assertEqual(update[0][2], "pohunek.context.assistant")
+        self.assertEqual(update[0][update[0].index("--sha256") + 1], self.digest)
+        self.assertEqual(self.read_record()["assistant"], {"source": "tool", "version": VERSION, "digest": "sha256:" + self.digest})
+
+    def test_a_newer_selected_package_is_kept(self):
+        self.seed_packages(("0.43.0", "sha256:" + "43" * 32, True))
+        r = self.run_tool(["--yes", *self.demo()])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.find(["plugin", "install"]) + self.find(["plugin", "update"]), [])
+        self.assertEqual(self.read_record()["assistant"], {"source": "present", "version": "0.43.0", "digest": "sha256:" + "43" * 32})
+
+    def test_the_same_digest_disabled_is_left_to_the_owner(self):
+        self.seed_packages((VERSION, "sha256:" + self.digest, False))
+        r = self.run_tool(["--yes", *self.demo()])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(f"pohunek plugin enable pohunek.context.assistant --digest sha256:{self.digest}", r.stderr)
+        self.assertEqual(self.writes(), [])
+        self.assert_no_record()
+
+    def test_an_installed_digest_other_than_the_verified_one_stops(self):
+        r = self.run_tool(["--yes", *self.demo()], {"DEMO_POHUNEK_INSTALL_DIGEST": "sha256:" + "66" * 32})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("installed a package digest other than the verified one", r.stderr)
+        self.assertEqual(len(self.find(["plugin", "install"])), 1)
+        self.assertEqual(self.find(["assistant", "setup"]), [])
+        self.assert_no_record()
+
+    def test_an_unsafe_record_path_stops_before_the_yes(self):
+        state = self.home / ".local" / "state"
+        state.mkdir(parents=True)
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        (state / "omarchy").symlink_to(elsewhere)
+        for args in (["--yes", *self.demo()], ["--launch-only", "--yes", *self.demo()]):
+            with self.subTest(args=args):
+                r = self.run_tool(args, {"DEMO_POHUNEK_ASSISTANT": "present"})
+                self.assertEqual(r.returncode, 1)
+                self.assertIn("cannot be written safely", r.stderr)
+                self.assertIn("Nothing was changed.", r.stderr)
+                self.assertEqual(self.writes(), [])
+                self.assertEqual(list(elsewhere.iterdir()), [])
 
     def test_a_present_assistant_package_is_not_installed_again(self):
         shutil.rmtree(self.fixtures)
