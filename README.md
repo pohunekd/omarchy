@@ -240,9 +240,16 @@ IPC for your own bindings: `omarchy-shell pohunek.sessions toggle | newSession |
   the core release notes and, when `gh` is signed in, its build attestation),
   then asks once; nothing is written before that yes. It never uses `sudo` and
   never changes your network.
-- **The onboard session reads metadata only.** It looks at projects, sessions,
-  profiles and hooks, reads agent history paths only with your consent, never
-  transcripts or credentials, and proposes each change before it runs it.
+- **What the guided onboard session is told, and what enforces it.** Its
+  fixed request tells it to read pohunek metadata only (projects, sessions,
+  profiles and hooks; agent history paths only with your consent), never
+  transcripts or credentials, to act on this machine only, and to ask you in
+  the conversation before each change. That is an instruction, not a control:
+  the session runs with your agent's default profile, so in guided mode its
+  commands are held back only by your agent's own permission prompts. The tool
+  itself writes nothing before your one yes; beyond what `pohunek setup`
+  applies, it adds only the onboarding record and, when setup cannot, the
+  verified assistant package.
 
 ## Troubleshooting
 
