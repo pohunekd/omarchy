@@ -189,7 +189,7 @@
  "help.addShortcuts": "Přidat tyto zkratky do Hyprlandu",
  "onboard.title": "Začínáme",
  "onboard.missingText": "pohunek na tomto stroji zatím není. Nastavit pohunek stáhne poslední vydání, ověří ho, ukáže každou změnu a před zápisem se jednou zeptá.",
- "onboard.readyText": "Průvodce nastavením projde s tebou projekty, skupiny, profily agentů a hooky. Každou změnu navrhne a počká na tvé ano.",
+ "onboard.readyText": "Průvodce nastavením s tebou projde projekty, skupiny, profily agentů a hooky. Má pokyn navrhovat jednu změnu po druhé a nejdřív se zeptat.",
  "onboard.running": "Nastavení probíhá",
  "onboard.agent": "Agent",
  "onboard.setUp": "Nastavit pohunek",
@@ -197,5 +197,6 @@
  "onboard.open": "Otevřít",
  "onboard.whatChanges": "Co se změní?",
  "onboard.notNow": "Teď ne",
- "help.onboardAgain": "Spustit nastavení znovu"
+ "help.onboardAgain": "Spustit nastavení znovu",
+ "msg.toolRefused": "%1 se nespustil: složka pluginu, nastavení command nebo argument obsahuje znaky, které příkaz v terminálu nepřenese"
 }

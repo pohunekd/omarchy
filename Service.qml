@@ -59,7 +59,8 @@ Item {
   property var layout: ({ view: "groups", collapsed: {}, groups: [], recentProjects: [], onboardingDismissed: false })
 
   // ---- Get started card ----
-  // tools/onboard writes the record; the widget reads only whether it exists.
+  // tools/onboard writes the record; the widget reads only whether it names
+  // the session it started (a failed launch leaves the card at ready).
   readonly property string onboardingRecordPath: Quickshell.env("HOME") + "/.local/state/omarchy/pohunek-onboarding.json"
   property bool onboardingRecordPresent: false
   property bool onboardingAgain: false   // Help → Run onboarding again, until the next start
@@ -117,7 +118,10 @@ Item {
   }
   function runTool(name, args) {
     var list = args === undefined || args === "" ? [] : (Array.isArray(args) ? args : [args])
-    if (tools.indexOf(name) < 0 || !/^\/[A-Za-z0-9._\/-]+$/.test(pluginDir) || !toolArgsValid(name, list)) return
+    if (tools.indexOf(name) < 0 || !/^\/[A-Za-z0-9._\/-]+$/.test(pluginDir) || !toolArgsValid(name, list)) {
+      say(t("msg.toolRefused", "%1 did not start: the plugin folder, the command setting or an argument holds characters a terminal command cannot carry").arg(name), true)
+      return
+    }
     var line
     if (name === "doctor") line = "'" + root.command.replace(/'/g, "") + "' doctor"
     else line = "'" + pluginDir + "/tools/" + name + "'"
@@ -435,7 +439,7 @@ Item {
     watchChanges: true
     printErrors: false
     onFileChanged: reload()
-    onLoaded: root.onboardingRecordPresent = true
+    onLoaded: root.onboardingRecordPresent = Model.onboardingRecordLaunched(text())
     onLoadFailed: function(error) { root.onboardingRecordPresent = false }
   }
 

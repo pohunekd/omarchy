@@ -145,6 +145,14 @@ const onboardRows = M.buildRows([{ target: "local", label: "w", reachable: true,
   sessions: [S({ id: "s-on", onboardMode: "guided", onboardState: "" })] }], { idle: {}, needs: {} }, NOW, T)
 assert.deepStrictEqual(card({ rows: onboardRows }), { state: "running", target: "s-on" }, "rows carry onboard.mode from fetch.py")
 
+// a record counts only once it names the session it started
+assert.strictEqual(M.onboardingRecordLaunched('{"schema":1,"run_id":"ab","session_id":"s-01J"}'), true)
+assert.strictEqual(M.onboardingRecordLaunched('{"schema":1,"run_id":"ab"}'), false, "launch failed: no session_id")
+assert.strictEqual(M.onboardingRecordLaunched('{"schema":1,"session_id":"bad id"}'), false)
+assert.strictEqual(M.onboardingRecordLaunched('{"schema":2,"session_id":"s-01J"}'), false, "unknown schema")
+assert.strictEqual(M.onboardingRecordLaunched("not json"), false)
+assert.strictEqual(M.onboardingRecordLaunched(""), false)
+
 // agent picker of the card
 assert.deepStrictEqual(M.onboardAgents({ runtimes: [
   { agent: "claude", agent_base: "claude", available: true, supported: true },

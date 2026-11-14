@@ -405,9 +405,17 @@ function onboardAgents(inspect) {
   return out.sort(function(a, b) { return rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0) })
 }
 
-// State of the Get started card. facts: { installed, recordPresent (the
-// onboarding record exists), dismissed (Not now), again (Run onboarding
-// again), rows }. An onboard session is a live row of this machine whose
+// Whether the onboarding record tools/onboard wrote names the session it
+// started. A record without one is a run whose session never started.
+function onboardingRecordLaunched(text) {
+  var doc = null
+  try { doc = JSON.parse(String(text || "")) } catch (e) { return false }
+  return !!doc && typeof doc === "object" && doc.schema === 1 && validSessionId(doc.session_id)
+}
+
+// State of the Get started card. facts: { installed, recordPresent (an
+// onboarding record that names its session, see onboardingRecordLaunched),
+// dismissed (Not now), again (Run onboarding again), rows }. An onboard session is a live row of this machine whose
 // `onboard.mode` is set and whose agent has not set `onboard.state=done`;
 // it wins over every other fact except a missing pohunek.
 function onboardingCard(facts) {
@@ -522,7 +530,7 @@ if (typeof module !== "undefined") {
     summary: summary, newAttention: newAttention, stateIndex: stateIndex, projects: projects,
     groupNames: groupNames, ageParts: ageParts, pushRecent: pushRecent, filterCount: filterCount,
     fuzzyScore: fuzzyScore, fuzzyFilter: fuzzyFilter, FUZZY_THRESHOLD: FUZZY_THRESHOLD,
-    onboardAgents: onboardAgents, onboardingCard: onboardingCard,
+    onboardAgents: onboardAgents, onboardingCard: onboardingCard, onboardingRecordLaunched: onboardingRecordLaunched,
     INBOX: INBOX, NEEDS_YOU: NEEDS_YOU
   }
 }

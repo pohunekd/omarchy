@@ -181,7 +181,7 @@
  "help.addShortcuts": "Add these shortcuts to Hyprland",
  "onboard.title": "Get started",
  "onboard.missingText": "pohunek is not on this machine yet. Set up pohunek downloads the latest release, verifies it, shows every change, and asks once before it writes anything.",
- "onboard.readyText": "The onboard manager walks you through your projects, groups, agent profiles and hooks. It proposes each change and waits for your yes.",
+ "onboard.readyText": "The onboard manager walks you through your projects, groups, agent profiles and hooks. It is told to propose one change at a time and ask you first.",
  "onboard.running": "Onboarding in progress",
  "onboard.agent": "Agent",
  "onboard.setUp": "Set up pohunek",
@@ -189,5 +189,6 @@
  "onboard.open": "Open",
  "onboard.whatChanges": "What will this change?",
  "onboard.notNow": "Not now",
- "help.onboardAgain": "Run onboarding again"
+ "help.onboardAgain": "Run onboarding again",
+ "msg.toolRefused": "%1 did not start: the plugin folder, the command setting or an argument holds characters a terminal command cannot carry"
 }
