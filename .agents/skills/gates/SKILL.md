@@ -2,7 +2,7 @@
 name: gates
 description: >-
   Run the omarchy gate set (model test, fetch snapshot, manifest, symlinks,
-  shell, changelog) locally and report each gate's real result. Use before any
+  shell, onboard, changelog) locally and report each gate's real result. Use before any
   commit, push, or claim that a change works or is done.
 ---
 
@@ -20,6 +20,8 @@ non-zero if any gate failed:
 - `symlinks`: no tracked symlink (git mode 120000), plus its test
 - `shell`: `bash -n` and `shellcheck` on every bash script under `tools/` and
   `scripts/`
+- `onboard`: `tests/onboard_test.py`, the `tools/onboard` scenarios against
+  `tools/demo-pohunek` (needs `jq`, `curl`, `tar` and `sha256sum` on PATH)
 - `changelog` and `changelog-tests`: `scripts/changelog check` and
   `tests/changelog_test.py`
 - `qml`: `tests/qml_check.py`, only when `quickshell` and the Omarchy shell

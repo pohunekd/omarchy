@@ -120,6 +120,8 @@ def slim_session(raw, host):
         "worktree": clean(raw.get("worktree_path"), 400),
         "group": clean(meta.get("companion.group"), 120) if "companion.group" in meta else None,
         "work": work_facts(meta),
+        "onboardMode": clean(meta.get("onboard.mode"), 20),
+        "onboardState": clean(meta.get("onboard.state"), 20),
         "resumable": bool(raw.get("native_session_id") or raw.get("active_agent_session_id")),
         "external": bool(raw.get("external")),
         "createdAt": clean(raw.get("created_at"), 40),
