@@ -52,7 +52,7 @@ Edit only `.agents/skills/`.
 ## Commands
 
 ```bash
-scripts/gates                  # model, fetch, manifest, symlinks, shell, changelog (+ qml when available)
+scripts/gates                  # model, fetch, manifest, symlinks, shell, onboard, changelog (+ qml when available)
 scripts/changelog check        # validate the changelog fragments (CI runs it too)
 node tests/model.test.js       # Model.js rules
 python3 -I tests/qml_check.py  # offscreen Quickshell check; needs quickshell and the Omarchy shell

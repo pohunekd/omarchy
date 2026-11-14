@@ -123,6 +123,50 @@ assert.deepStrictEqual(M.fuzzyFilter(projs, "").map(p => p.label), projs.map(p =
 assert.strictEqual(M.fuzzyFilter(projs, "comp", 2).length, 2, "limit")
 assert.strictEqual(M.fuzzyFilter(projs, "zz").length, 0)
 
+// Get started card: missing, ready, running, done, dismissed
+const card = (o) => M.onboardingCard({ installed: true, recordPresent: false, dismissed: false, again: false, rows: [], ...o })
+const onboardRow = (o) => ({ host: "local", target: "s-on", stale: false, ownerState: "working", onboardMode: "guided",
+  onboardState: "", updatedAt: 1, ...o })
+assert.strictEqual(card({ installed: false, dismissed: true, recordPresent: true }).state, "missing", "no pohunek wins")
+assert.deepStrictEqual(card({}), { state: "ready", target: "" })
+assert.deepStrictEqual(card({ rows: [onboardRow()] }), { state: "running", target: "s-on" })
+assert.strictEqual(card({ rows: [onboardRow()], dismissed: true, recordPresent: true }).state, "running", "running wins over dismissed and done")
+assert.strictEqual(card({ recordPresent: true }).state, "done")
+assert.strictEqual(card({ dismissed: true }).state, "dismissed")
+assert.strictEqual(card({ dismissed: true, recordPresent: true }).state, "dismissed")
+assert.strictEqual(card({ dismissed: true, recordPresent: true, again: true }).state, "ready", "Run onboarding again shows the card")
+assert.strictEqual(card({ recordPresent: true, rows: [onboardRow({ ownerState: "ended" })] }).state, "done", "an ended session is not running")
+assert.strictEqual(card({ rows: [onboardRow({ onboardState: "done" })] }).state, "ready", "the agent marked it done")
+assert.strictEqual(card({ rows: [onboardRow({ host: "laptop", target: "laptop/s-on" })] }).state, "ready", "only this machine counts")
+assert.strictEqual(card({ rows: [onboardRow({ stale: true })] }).state, "ready", "a stale row is not running")
+assert.strictEqual(card({ rows: [onboardRow({ onboardMode: "" })] }).state, "ready", "no onboard.mode, no onboard session")
+assert.strictEqual(card({ rows: [onboardRow({ target: "s-old" }), onboardRow({ target: "s-new", updatedAt: 9 })] }).target, "s-new", "newest wins")
+const onboardRows = M.buildRows([{ target: "local", label: "w", reachable: true, notifications: [],
+  sessions: [S({ id: "s-on", onboardMode: "guided", onboardState: "" })] }], { idle: {}, needs: {} }, NOW, T)
+assert.deepStrictEqual(card({ rows: onboardRows }), { state: "running", target: "s-on" }, "rows carry onboard.mode from fetch.py")
+
+// a record counts only once it names the session it started
+assert.strictEqual(M.onboardingRecordLaunched('{"schema":1,"run_id":"ab","session_id":"s-01J"}'), true)
+assert.strictEqual(M.onboardingRecordLaunched('{"schema":1,"run_id":"ab"}'), false, "launch failed: no session_id")
+assert.strictEqual(M.onboardingRecordLaunched('{"schema":1,"session_id":"bad id"}'), false)
+assert.strictEqual(M.onboardingRecordLaunched('{"schema":2,"session_id":"s-01J"}'), false, "unknown schema")
+assert.strictEqual(M.onboardingRecordLaunched("not json"), false)
+assert.strictEqual(M.onboardingRecordLaunched(""), false)
+
+// agent picker of the card
+assert.deepStrictEqual(M.onboardAgents({ runtimes: [
+  { agent: "claude", agent_base: "claude", available: true, supported: true },
+  { agent: "codex", agent_base: "codex", available: true },
+  { agent: "shell", agent_base: "shell", available: true },
+  { agent: "work-sh", agent_base: "shell", available: true },
+  { agent: "pi", agent_base: "pi", available: false },
+  { agent: "old-claude", agent_base: "claude", available: true, supported: false },
+  { agent: "bad id", available: true },
+  { agent: "codex", available: true } ] }), ["codex", "claude"], "available, supported, not shell, ranked")
+assert.deepStrictEqual(M.onboardAgents(null), [])
+assert.deepStrictEqual(M.onboardAgents({ runtimes: [{ agent: "zed", available: true }, { agent: "hermes", available: true },
+  { agent: "alpha", available: true }] }), ["hermes", "alpha", "zed"])
+
 // Optional: a real fetch.py snapshot must build without throwing.
 if (process.argv[2]) {
   const snap = JSON.parse(fs.readFileSync(process.argv[2], "utf8"))

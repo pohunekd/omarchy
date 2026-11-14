@@ -78,6 +78,12 @@ gate_shell() {
   shellcheck "${own[@]}"
 }
 
+# tools/onboard and the shared verified download against tools/demo-pohunek.
+# shellcheck disable=SC2317,SC2329
+gate_onboard() {
+  python3 -I tests/onboard_test.py
+}
+
 # shellcheck disable=SC2317,SC2329
 gate_changelog() {
   scripts/changelog check
@@ -88,13 +94,14 @@ gate_changelog_tests() {
   python3 -I tests/changelog_test.py
 }
 
-export -f gate_model gate_fetch gate_manifest gate_symlinks shell_files gate_shell gate_changelog gate_changelog_tests
+export -f gate_model gate_fetch gate_manifest gate_symlinks shell_files gate_shell gate_onboard gate_changelog gate_changelog_tests
 
 run_gate model gate_model
 run_gate fetch gate_fetch
 run_gate manifest gate_manifest
 run_gate symlinks gate_symlinks
 run_gate shell gate_shell
+run_gate onboard gate_onboard
 run_gate changelog gate_changelog
 run_gate changelog-tests gate_changelog_tests
 

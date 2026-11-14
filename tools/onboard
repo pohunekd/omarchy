@@ -1,0 +1,552 @@
+#!/usr/bin/env bash
+# Onboards this machine to pohunek in guided mode. Run by the widget's
+# Get started card in a floating terminal; safe to run by hand.
+#
+# Without --launch-only it installs or completes pohunek: it reads
+# `pohunek setup --dry-run --json` (on a fresh machine from the latest verified
+# release archive), asks which agent homes get hooks and whether the onboard
+# manager may read agent history metadata, shows everything it will change,
+# and asks once. Then it runs `pohunek setup`, installs the verified assistant
+# package when setup cannot, writes the onboarding record and starts the onboard
+# session, which proposes each change and waits for you.
+#
+#   --launch-only    pohunek is set up already: skip the download and setup
+#   --agent NAME     the agent (or host profile) that runs the onboard session
+#   --command PATH   the pohunek CLI to use (default: pohunek on PATH)
+#   --yes            no questions; hooks only with --hooks, history only with --history yes
+#   --hooks LIST     with --yes: `none` or agent homes as agent[:profile],...
+#   --history yes|no with --yes: the history-metadata consent (default no)
+#
+# Never passes --accept-runtime-loss, --stop-sessions or --purge; never sudo.
+set -euo pipefail
+
+MIN_VERSION="0.42.0"
+RECORD_DIR="${HOME:-}/.local/state/omarchy"
+RECORD="$RECORD_DIR/pohunek-onboarding.json"
+AGENT_RE='^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+COMMAND_RE='^[A-Za-z0-9._/~+-]{1,256}$'
+NAME_RE='[A-Za-z0-9][A-Za-z0-9._-]{0,63}'
+HOME_RE="^${NAME_RE}(:${NAME_RE})?\$"
+ID_RE='^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+# Text from the CLI is printed through this filter: no terminal control codes.
+JQ_CLEAN='def clean: tostring | gsub("[[:cntrl:]]"; " ");'
+
+here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=tools/verified-download.bash
+source "$here/verified-download.bash"
+
+say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+die() { printf '\n\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
+usage_error() { printf '%s\n' "$*" >&2; exit 2; }
+ask() {
+  local answer
+  read -r -p "$1 [y/N] " answer || return 1
+  [[ $answer == [yY]* ]]
+}
+
+LAUNCH_ONLY=0
+ASSUME_YES=0
+AGENT=""
+COMMAND="pohunek"
+HOOKS_ARG=""
+HISTORY_ARG=""
+while (( $# > 0 )); do
+  case $1 in
+  --launch-only) LAUNCH_ONLY=1 ;;
+  --yes | -y) ASSUME_YES=1 ;;
+  --agent | --command | --hooks | --history)
+    (( $# >= 2 )) || usage_error "$1 needs a value."
+    case $1 in
+    --agent) AGENT=$2 ;;
+    --command) COMMAND=$2 ;;
+    --hooks) HOOKS_ARG=$2 ;;
+    --history) HISTORY_ARG=$2 ;;
+    esac
+    shift ;;
+  -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
+  *) usage_error "unknown option: $1" ;;
+  esac
+  shift
+done
+
+[[ -z $AGENT || $AGENT =~ $AGENT_RE ]] || usage_error "Not an agent name: $AGENT"
+[[ $COMMAND =~ $COMMAND_RE && $COMMAND != -* ]] || usage_error "Not a command path: $COMMAND"
+if (( ! ASSUME_YES )) && [[ -n $HOOKS_ARG || -n $HISTORY_ARG ]]; then
+  usage_error "--hooks and --history go with --yes; without it the tool asks."
+fi
+[[ -z $HISTORY_ARG || $HISTORY_ARG == yes || $HISTORY_ARG == no ]] || usage_error "--history is yes or no."
+if [[ -n $HOOKS_ARG && $HOOKS_ARG != none ]]; then
+  IFS=, read -r -a _homes <<<"$HOOKS_ARG"
+  for _home in "${_homes[@]}"; do
+    [[ $_home =~ $HOME_RE ]] || usage_error "--hooks takes none or agent[:profile],...: $HOOKS_ARG"
+  done
+fi
+if (( LAUNCH_ONLY )) && [[ -n $HOOKS_ARG ]]; then
+  usage_error "--launch-only installs no hooks; drop --hooks."
+fi
+# Every question needs a terminal; without one only --yes runs, and it writes
+# nothing it was not told to.
+if (( ! ASSUME_YES )) && ! [[ -t 0 && -t 1 ]]; then
+  usage_error "No terminal to ask in: run this in a terminal, or pass --yes (hooks then only with --hooks). Nothing was changed."
+fi
+[[ ${HOME:-} == /* ]] || die "HOME is not set to an absolute path."
+for tool in jq mktemp od tar; do
+  command -v "$tool" >/dev/null 2>&1 || die "$tool is required."
+done
+vd_init || die "Cannot download releases here."
+
+work=$(mktemp -d -t pohunek-onboard.XXXXXX)
+record_tmp=""
+cleanup() {
+  rm -rf "$work"
+  if [[ -n $record_tmp ]]; then rm -f "$record_tmp"; fi
+}
+trap cleanup EXIT
+
+POHUNEK=""
+# Filled by run_cli.
+check=null dry=null plan=null setup_out=null listed=null
+# The pohunek CLI the widget is set to, as an absolute path, or nothing.
+resolve_cli() {
+  local c=$1 tilde="~"
+  if [[ $c == "$tilde/"* ]]; then c="$HOME/${c#"$tilde/"}"; fi
+  if [[ $c == */* ]]; then
+    if [[ -f $c && -x $c ]]; then POHUNEK=$c; fi
+  else
+    POHUNEK=$(type -P -- "$c" || true)
+  fi
+}
+
+core_version() {
+  local out
+  out=$("$1" --version 2>/dev/null) || return 1
+  out=${out#pohunek }
+  [[ $out =~ $VD_VERSION_RE ]] || return 1
+  printf '%s\n' "$out"
+}
+
+# Whether version $1 is at least $2, comparing major.minor.patch; a suffix
+# such as a pre-release is ignored, the dry run still refuses what it lacks.
+version_at_least() {
+  local -a have need
+  local i
+  IFS=. read -r -a have <<<"${1%%[-+]*}"
+  IFS=. read -r -a need <<<"$2"
+  for i in 0 1 2; do
+    if (( 10#${have[i]:-0} > 10#${need[i]} )); then return 0; fi
+    if (( 10#${have[i]:-0} < 10#${need[i]} )); then return 1; fi
+  done
+  return 0
+}
+
+require_version() {
+  version_at_least "$CORE_VERSION" "$MIN_VERSION" && return 0
+  die "pohunek $MIN_VERSION or newer is needed; this machine has $CORE_VERSION. Missing here:
+  - pohunek setup --hooks, to choose which agent homes get hooks ($MIN_VERSION)
+  - the assistant package step of pohunek setup ($MIN_VERSION)
+  - profile file digests and agent skill states for the onboarding record ($MIN_VERSION)
+Upgrade pohunek first (https://pohunek.dev/docs/), then start onboarding again. Nothing was changed."
+}
+
+# Runs the pohunek CLI with --json output into the variable named $1 and
+# returns its exit status; output that is not JSON is replaced by null.
+run_cli() {
+  local -n _out=$1
+  local rc=0
+  shift
+  _out=$("$POHUNEK" "$@") || rc=$?
+  if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$_out"; then _out=null; fi
+  return "$rc"
+}
+
+# The core's own error text of a --json failure document.
+cli_error() {
+  jq -r "$JQ_CLEAN"' if type == "object" and .err then (.err.msg | clean) + (if .err.recover then "\n  " + (.err.recover | clean) else "" end) else "no JSON error document" end' <<<"$1"
+}
+
+# Prints install, update, present <version>, keep <version> or blocked for the
+# verified assistant package, from what the daemon has installed. Without a
+# daemon (a fresh machine before setup) it is install.
+assistant_plan() {
+  local list
+  if ! run_cli list plugin list --json || ! jq -e '.ok.packages | type == "array"' >/dev/null <<<"$list"; then
+    echo install
+    return
+  fi
+  # Mirrors the core's own step (setup_assistant.rs plan): the same digest is
+  # kept, a serving selection is never downgraded, an older one is updated.
+  jq -r --arg id "$VD_ASSISTANT_ID" --arg d "sha256:$VD_ASSISTANT_DIGEST" '
+    def serves: .enabled and .selected and (.fault == null) and ((.revoked // false) | not);
+    [.ok.packages[] | select(.package.id == $id)] as $mine
+    | ($mine | map(select(.digest == $d)) | first) as $same
+    | ($mine | map(select(.selected)) | first) as $sel
+    | if $same then (if ($same | serves) then "present " + $same.package.version else "blocked" end)
+      elif $sel and ($sel | serves) then "selected " + $sel.package.version
+      elif ($mine | length) > 0 then "update"
+      else "install" end' <<<"$list"
+}
+
+# Resolves "selected <version>" against the version this tool would install.
+resolve_selected() {
+  local plan=$1 selected
+  [[ $plan == selected\ * ]] || { printf '%s\n' "$plan"; return; }
+  selected=${plan#selected }
+  if [[ $(printf '%s\n%s\n' "$selected" "$CORE_VERSION" | sort -V | head -n 1) == "$CORE_VERSION" ]]; then
+    printf 'keep %s\n' "$selected"
+  else
+    echo update
+  fi
+}
+
+# Whether a failed `setup --yes --json` failed only because the assistant
+# package is a gap, exactly as the dry run previewed it: the core joins every
+# unmet check into `msg` (setup_host.rs verdict_problems) and appends the
+# changes made, so any other problem changes the text.
+only_assistant_gap() {
+  local gap="the assistant package is not installed: $1; install it by hand with \`$2\`"
+  jq -e --arg want "setup did not complete: $gap" '
+    .err.code == "setup_incomplete" and (.err.msg | type == "string")
+    and ((.err.msg | split($want)) as $parts
+         | ($parts | length) == 2 and $parts[0] == ""
+           and ($parts[1] == "" or ($parts[1] | startswith(". Changes made: "))))' >/dev/null <<<"$3"
+}
+
+# Whether the record can be written: an existing record directory (and its
+# parent) is a real directory and an existing record a regular file. Checked
+# before the yes too, so a bad path stops the run before anything is applied.
+record_path_ok() {
+  local parent=${RECORD_DIR%/*}
+  if [[ -L $parent || ( -e $parent && ! -d $parent ) ]]; then return 1; fi
+  if [[ -L $RECORD_DIR || ( -e $RECORD_DIR && ! -d $RECORD_DIR ) ]]; then return 1; fi
+  if [[ -L $RECORD || ( -e $RECORD && ! -f $RECORD ) ]]; then return 1; fi
+  return 0
+}
+
+require_record_path() {
+  record_path_ok || die "$RECORD cannot be written safely: its directory or the file is a symbolic link or not of the expected type. Nothing was changed."
+}
+
+write_record() {
+  local doc=$1
+  record_path_ok || die "$RECORD cannot be written safely; not writing it."
+  mkdir -p -- "${RECORD_DIR%/*}"
+  if [[ ! -e $RECORD_DIR ]]; then mkdir -m 700 -- "$RECORD_DIR" 2>/dev/null || true; fi
+  [[ -d $RECORD_DIR && ! -L $RECORD_DIR ]] || die "$RECORD_DIR is not a directory."
+  record_path_ok || die "$RECORD cannot be written safely; not writing it."
+  # mktemp creates the file 0600 in the same directory, so the rename is atomic.
+  record_tmp=$(mktemp "$RECORD_DIR/.pohunek-onboarding.json.XXXXXX")
+  printf '%s\n' "$doc" >"$record_tmp"
+  chmod 600 "$record_tmp"
+  sync -- "$record_tmp"
+  mv -fT -- "$record_tmp" "$RECORD"
+  record_tmp=""
+}
+
+request_text() {
+  local text="Onboard this machine with me in guided mode. Look at what pohunek knows about this host: projects, sessions and their groups, agent profiles and hooks. Propose one change at a time: show the exact command, say what it does, and ask me in this conversation before you run it. A permission prompt of your agent CLI does not replace that question. Act on this machine only: never pass --host and never a <host>/<session-id> target. Never read transcripts, history files, credentials or profile secrets. If a pohunek command cannot reach the daemon from inside your sandbox, say so; that is not a sign that the daemon is down."
+  if [[ $1 == yes ]]; then
+    text+=" I consent to project proposals from agent history metadata: you may run \`pohunek project candidates --sources pohunek --sources history --json\`."
+  else
+    text+=" Propose projects only with \`pohunek project candidates --json\`; do not read agent history."
+  fi
+  printf '%s' "$text"
+}
+
+# Snapshot for the record: project ids, profile names with file digests, and
+# the hook and skill state of every agent home. Metadata only.
+take_snapshot() {
+  local projects profiles integrations
+  run_cli projects project list --json || die "Could not read the projects: $(cli_error "$projects")"
+  # `--all` also lists agent and hidden profiles; a core without it (0.42) has
+  # no profile audiences, so its plain list is already complete.
+  if ! run_cli profiles plugin profile list --all --json; then
+    [[ $(jq -r '.err.code // empty' <<<"$profiles") == cli_usage ]] ||
+      die "Could not read the agent profiles: $(cli_error "$profiles")"
+    run_cli profiles plugin profile list --json || die "Could not read the agent profiles: $(cli_error "$profiles")"
+  fi
+  run_cli integrations integration status --all-profiles --json ||
+    die "Could not read the hook state: $(cli_error "$integrations")"
+  jq -n --argjson p "$projects" --argjson pr "$profiles" --argjson i "$integrations" '{
+    projects: [$p.ok[]? | .id],
+    profiles: [$pr.ok.profiles[]? | {name, file_digest: (.file_digest // null)}],
+    integrations: $i.ok
+  }'
+}
+
+ensure_assistant_works() {
+  local out
+  if run_cli out assistant help --print-prompt --json "${agent_args[@]}"; then return 0; fi
+  if [[ $(jq -r '.err.code // empty' <<<"$out") == assistant_package_missing ]] && (( LAUNCH_ONLY && ! ASSUME_YES )); then
+    echo "The assistant package is not installed, so the onboard session cannot start."
+    if ask "Run the full setup now (it shows its changes and asks first)?"; then
+      local args=(--command "$COMMAND")
+      if [[ -n $AGENT ]]; then args+=(--agent "$AGENT"); fi
+      cleanup
+      trap - EXIT
+      exec "$here/onboard" "${args[@]}"
+    fi
+  fi
+  die "pohunek assistant cannot start: $(cli_error "$out")"
+}
+
+# Writes the record, starts the onboard session and attaches to it.
+start_session() {
+  local setup_result=$1 assistant=$2 hooks_json=$3 snapshot run_id started_at doc launch sid app_id
+  snapshot=$(take_snapshot)
+  run_id=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+  [[ $run_id =~ ^[0-9a-f]{32}$ ]] || die "Could not create a run id."
+  started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  doc=$(jq -n --arg run "$run_id" --arg started "$started_at" --arg history "$HISTORY" --arg agent "$AGENT" \
+    --arg core "$CORE_VERSION" --argjson setup "$setup_result" --argjson assistant "$assistant" \
+    --argjson hooks "$hooks_json" --argjson snapshot "$snapshot" '{
+      schema: 1, run_id: $run, started_at: $started, mode: "guided", history: $history,
+      agent: (if $agent == "" then null else $agent end), core_version: $core,
+      setup_result: $setup, assistant: $assistant, hooks_selected: $hooks, snapshot: $snapshot }')
+  write_record "$doc"
+  echo "Onboarding record: $RECORD"
+
+  say "Starting the onboard session…"
+  local rc=0
+  launch=$(request_text "$HISTORY" | "$POHUNEK" assistant setup --request-stdin --json \
+    --meta "onboard.mode=guided" --meta "onboard.run=$run_id" --meta "onboard.history=$HISTORY" \
+    "${agent_args[@]}") || rc=$?
+  if (( rc != 0 )) || ! jq -e '.ok.session.id | type == "string"' >/dev/null 2>&1 <<<"$launch"; then
+    jq -e 'type == "object"' >/dev/null 2>&1 <<<"$launch" || launch=null
+    die "The onboard session did not start: $(cli_error "$launch")"
+  fi
+  sid=$(jq -r '.ok.session.id' <<<"$launch")
+  [[ $sid =~ $ID_RE ]] || die "pohunek returned an unexpected session id."
+  write_record "$(jq --arg sid "$sid" '. + {session_id: $sid}' <<<"$doc")"
+  echo "Onboard session: $sid (Ctrl+] detaches; it keeps running)."
+
+  # The app id the widget's Open uses, so it focuses this window.
+  app_id="org.omarchy.pohunek.$(printf '%s' "$sid" | sed -E 's/[^A-Za-z0-9]+/-/g' | cut -c1-80)"
+  if command -v omarchy-launch-or-focus-tui >/dev/null 2>&1; then
+    omarchy-launch-or-focus-tui "--app-id=$app_id" "$POHUNEK" attach "$sid"
+    exit 0
+  fi
+  cleanup
+  trap - EXIT
+  exec "$POHUNEK" attach "$sid"
+}
+
+agent_args=()
+if [[ -n $AGENT ]]; then agent_args=(--agent "$AGENT"); fi
+HISTORY=${HISTORY_ARG:-no}
+history_question="Let the onboard manager propose projects from your agents' CLI history too? pohunek reads only the working directory and modification time of each history file, never its content."
+
+# ---------------------------------------------------------------- launch only
+if (( LAUNCH_ONLY )); then
+  resolve_cli "$COMMAND"
+  [[ -n $POHUNEK ]] || die "pohunek is not installed here. Use Set up pohunek (tools/onboard without --launch-only)."
+  CORE_VERSION=$(core_version "$POHUNEK") || die "Cannot read the version of $POHUNEK."
+  require_version
+  require_record_path
+  if (( ! ASSUME_YES )); then
+    if ask "$history_question"; then HISTORY=yes; else HISTORY=no; fi
+  fi
+  say "What this will do"
+  echo "  onboarding record  $RECORD (mode 0600): run id, your choices, project ids,"
+  echo "                     profile names with file digests, hook and skill state"
+  echo "  onboard session    pohunek assistant setup, guided mode, agent ${AGENT:-chosen by pohunek}, history $HISTORY"
+  echo "                     It is instructed to read pohunek metadata only and to ask before each change;"
+  echo "                     in guided mode only your agent's own permission prompts enforce anything."
+  echo
+  if (( ! ASSUME_YES )); then ask "Start the onboard session?" || die "Cancelled; nothing was changed."; fi
+  ensure_assistant_works
+  start_session null null "[]"
+fi
+
+# ------------------------------------------------------------------ full setup
+fresh=0
+resolve_cli "$COMMAND"
+if [[ -z $POHUNEK ]]; then
+  fresh=1
+  [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] ||
+    die "pohunek releases cover Linux x86_64 here (macOS: brew install zajca/pohunek/pohunek). This machine is $(uname -sm)."
+  say "pohunek is not installed: fetching the latest release…"
+  vd_latest_core "$work" || die "Could not reach GitHub."
+  vd_fetch_core "$work" || die "Verification failed: nothing was changed."
+  mkdir "$work/extract"
+  tar -xzf "$VD_CORE_ARCHIVE" -C "$work/extract" --no-same-owner
+  release_dir="$work/extract/pohunek-daemon-${VD_CORE_VERSION}-x86_64-unknown-linux-gnu"
+  [[ -f $release_dir/pohunek && -x $release_dir/pohunek && -d $release_dir/packaging ]] ||
+    die "The archive does not have the expected layout."
+  # pohunek setup verifies an extracted archive with its own
+  # packaging/verify-archive before any change.
+  POHUNEK="$release_dir/pohunek"
+fi
+CORE_VERSION=$(core_version "$POHUNEK") || die "Cannot read the version of $POHUNEK."
+require_version
+require_record_path
+
+prefix=""
+if (( fresh )); then
+  run_cli check service check --json || die "pohunek service check refused: $(cli_error "$check")"
+  prefix=$(jq -r '.ok.prefix // empty' <<<"$check")
+  [[ $prefix == /* && $prefix != *$'\n'* ]] || die "pohunek service check reported no install prefix."
+fi
+
+say "Reading the setup plan…"
+if ! run_cli dry setup --dry-run --json --hooks all; then
+  if [[ $(jq -r '.err.code // empty' <<<"$dry") == cli_usage ]]; then
+    die "This pohunek ($CORE_VERSION) refuses \`setup --dry-run --json --hooks all\`: $(cli_error "$dry")
+Choosing agent homes needs \`setup --hooks\` (pohunek $MIN_VERSION or newer). Nothing was changed."
+  fi
+  die "pohunek setup cannot plan this machine: $(cli_error "$dry")"
+fi
+assistant_status=$(jq -r '.ok.assistant.status // "absent"' <<<"$dry")
+case $assistant_status in
+gap | install | present) ;;
+*) die "pohunek setup planned no assistant package step: pohunek $MIN_VERSION or newer is needed. Nothing was changed." ;;
+esac
+
+homes=()
+while IFS= read -r home; do
+  if [[ $home =~ $HOME_RE ]]; then homes+=("$home"); else echo "  (an agent home with an unexpected name is left out)"; fi
+done < <(jq -r '.ok.integrations[]? | .runtime + (if .profile then ":" + .profile else "" end)' <<<"$dry")
+
+tool_plan=""
+gap_detail=""
+gap_command=""
+if [[ $assistant_status == gap ]]; then
+  gap_detail=$(jq -r '.ok.assistant.detail' <<<"$dry")
+  gap_command=$(jq -r '.ok.assistant.command' <<<"$dry")
+  say "pohunek setup cannot install the assistant package; fetching it for pohunek $CORE_VERSION…"
+  rc=0
+  vd_fetch_assistant "$work" "$CORE_VERSION" || rc=$?
+  if (( rc == 3 )); then
+    die "No assistant package was released for pohunek $CORE_VERSION yet, so the onboard session cannot start. Nothing was changed."
+  elif (( rc != 0 )); then
+    die "The assistant package failed verification: nothing was changed."
+  fi
+  # A fresh machine has no daemon to ask until setup installed it.
+  if (( fresh )); then tool_plan=install; else tool_plan=$(resolve_selected "$(assistant_plan)"); fi
+  [[ $tool_plan != blocked ]] || die "pohunek.context.assistant $CORE_VERSION is installed but not enabled and selected, and this tool leaves that choice to you:
+  pohunek plugin enable $VD_ASSISTANT_ID --digest sha256:$VD_ASSISTANT_DIGEST && pohunek plugin select $VD_ASSISTANT_ID --digest sha256:$VD_ASSISTANT_DIGEST
+Nothing was changed."
+fi
+
+# Hooks: one question per agent home, default no.
+selected=()
+if (( ASSUME_YES )); then
+  if [[ -n $HOOKS_ARG && $HOOKS_ARG != none ]]; then
+    IFS=, read -r -a wanted <<<"$HOOKS_ARG"
+    for home in "${wanted[@]}"; do
+      found=0
+      for h in "${homes[@]}"; do [[ $h == "$home" ]] && found=1; done
+      (( found )) || die "--hooks names $home, which is not an agent home here (homes: ${homes[*]:-none}). Nothing was changed."
+      selected+=("$home")
+    done
+  fi
+else
+  if (( ${#homes[@]} > 0 )); then
+    say "Agent hooks (session resume, better \"needs you\" detection)"
+    for home in "${homes[@]}"; do
+      if ask "Install pohunek's hooks into the agent home $home?"; then selected+=("$home"); fi
+    done
+  fi
+  if ask "$history_question"; then HISTORY=yes; else HISTORY=no; fi
+fi
+hooks_arg=none
+if (( ${#selected[@]} > 0 )); then hooks_arg=$(IFS=,; printf '%s' "${selected[*]}"); fi
+hooks_json=$(printf '%s\n' "${selected[@]}" | jq -R . | jq -s 'map(select(. != ""))')
+
+# The preview of exactly this selection; it also refuses an unknown home.
+run_cli plan setup --dry-run --json --hooks "$hooks_arg" || die "pohunek setup cannot plan this machine: $(cli_error "$plan")"
+
+say "What this will do"
+if (( fresh )); then
+  echo "pohunek setup, run from the verified release $VD_CORE_TAG (installs under $prefix):"
+else
+  echo "pohunek setup ($CORE_VERSION):"
+fi
+jq -r "$JQ_CLEAN"' .ok |
+  "  service      " + (.service.action | clean) + (if .service.from then " from " + (.service.from | clean) else "" end),
+  (.packages[]? | "  package      \(.runtime | clean): \(.package | clean) \(.version | clean) [\(.status | clean)]"),
+  (.profiles[]? | "  profile pin  \(.name | clean) (\(.base | clean)) [\(.status | clean)]"),
+  (.integrations[]? | "  hooks        \(.runtime | clean)\(if .profile then ":" + (.profile | clean) else "" end)"),
+  (.hermes_homes[]? | "  hermes home  \(.integration | clean) [\(.status | clean)]"),
+  (.config[]? | "  config       \(.path | clean)\(if .exists then " (kept)" else " (created)" end)"),
+  (.gaps[]? | "  gap          \(.runtime | clean): \(.detail | clean)"),
+  "  catalog      " + (.catalog | clean) + (if .catalog_note then ": " + (.catalog_note | clean) else "" end),
+  "  assistant    " + (.assistant | if .status == "install" then "installs \(.package_id | clean) \(.version | clean)"
+     elif .status == "present" then "present: \(.package_id | clean) \(.version | clean)"
+     else "gap: \(.detail | clean)" end)' <<<"$plan"
+if (( ${#selected[@]} == 0 )); then
+  echo "  hooks        none (no agent home is changed)"
+fi
+if [[ $assistant_status == gap ]]; then
+  echo
+  echo "The assistant package is installed by this tool because pohunek setup cannot:"
+  jq -r "$JQ_CLEAN"' "  " + (.ok.assistant.detail | clean)' <<<"$dry"
+  case $tool_plan in
+  install) echo "  plugin install  $VD_ASSISTANT_ID $CORE_VERSION, sha256 $VD_ASSISTANT_DIGEST" ;;
+  update) echo "  plugin update   $VD_ASSISTANT_ID to $CORE_VERSION, sha256 $VD_ASSISTANT_DIGEST" ;;
+  present\ * | keep\ *) echo "  nothing: $VD_ASSISTANT_ID ${tool_plan#* } is installed and selected already" ;;
+  esac
+  echo "  (verified against its SHA256SUMS and the core release notes of v$CORE_VERSION)"
+fi
+echo
+echo "Then:"
+echo "  onboarding record  $RECORD (mode 0600)"
+echo "  onboard session    pohunek assistant setup, guided mode, agent ${AGENT:-chosen by pohunek}, history $HISTORY"
+echo "                     It is instructed to read pohunek metadata only and to ask before each change;"
+echo "                     in guided mode only your agent's own permission prompts enforce anything."
+echo
+if (( ! ASSUME_YES )); then
+  ask "Apply this and start the onboard session?" || die "Cancelled; nothing was changed."
+fi
+
+# ------------------------------------------------------------------- apply
+say "Running pohunek setup (this can take a few minutes)…"
+setup_rc=0
+run_cli setup_out setup --yes --json --hooks "$hooks_arg" || setup_rc=$?
+[[ $setup_out != null ]] || die "pohunek setup ended with exit $setup_rc and no JSON result; run pohunek setup to see why."
+assistant_record=null
+if (( setup_rc == 0 )); then
+  # The core handled the package: listed by the index (install or present).
+  assistant_record=$(jq -c '.ok.preview.assistant // {} | if .status == "install" then {source: "core", version, digest}
+    elif .status == "present" then {source: "present", version, digest} else null end' <<<"$setup_out")
+elif [[ $assistant_status == gap ]] && only_assistant_gap "$gap_detail" "$gap_command" "$setup_out"; then
+  echo "pohunek setup finished every step except the assistant package, as previewed."
+else
+  die "pohunek setup did not complete: $(cli_error "$setup_out")
+The changes it lists are kept; this tool changed nothing else and started no session."
+fi
+
+if (( fresh )); then
+  POHUNEK="$prefix/bin/pohunek"
+  [[ -f $POHUNEK && -x $POHUNEK ]] || die "pohunek setup finished but $POHUNEK is missing."
+  export PATH="$prefix/bin:$PATH"
+fi
+
+if [[ $assistant_record == null && $assistant_status == gap ]]; then
+  # The daemon answers now; on a fresh machine this is the first look.
+  tool_plan=$(resolve_selected "$(assistant_plan)")
+  installed=""
+  case $tool_plan in
+  install)
+    say "Installing the assistant package…"
+    run_cli installed plugin install "$VD_ASSISTANT_ARCHIVE" --sha256 "$VD_ASSISTANT_DIGEST" --yes --json ||
+      die "plugin install failed: $(cli_error "$installed")" ;;
+  update)
+    say "Updating the assistant package…"
+    run_cli installed plugin update "$VD_ASSISTANT_ID" "$VD_ASSISTANT_ARCHIVE" --sha256 "$VD_ASSISTANT_DIGEST" --yes --json ||
+      die "plugin update failed: $(cli_error "$installed")" ;;
+  present\ * | keep\ *) ;;
+  *) die "pohunek.context.assistant $CORE_VERSION is installed but not enabled and selected; enable and select it, then start onboarding again." ;;
+  esac
+  if [[ -n $installed ]]; then
+    [[ $(jq -r '.ok.package.digest // empty' <<<"$installed") == "sha256:$VD_ASSISTANT_DIGEST" ]] ||
+      die "pohunek installed a package digest other than the verified one."
+    assistant_record=$(jq -nc --arg v "$CORE_VERSION" --arg d "sha256:$VD_ASSISTANT_DIGEST" '{source: "tool", version: $v, digest: $d}')
+  else
+    run_cli listed plugin list --json || die "Could not read the installed packages: $(cli_error "$listed")"
+    assistant_record=$(jq -c --arg id "$VD_ASSISTANT_ID" '[.ok.packages[] | select(.package.id == $id and .selected)] | first
+      | {source: "present", version: .package.version, digest}' <<<"$listed")
+  fi
+fi
+
+ensure_assistant_works
+start_session "$setup_out" "$assistant_record" "$hooks_json"

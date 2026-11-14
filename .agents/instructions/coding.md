@@ -12,9 +12,14 @@
   `companion.group` metadata key, the same key the desktop and Android
   companions use.
 - No network calls other than through the `pohunek` CLI and hosts it reaches,
-  with one exception: the Install pohunek action downloads the release of
-  pohunek, verifies it, shows what it will write, and runs only after the user
-  confirmed.
+  with one exception: `tools/install-pohunek` and `tools/onboard` download
+  GitHub releases of `zajca/pohunek` and `pohunekd/plugin-assistant` over https
+  through `tools/verified-download.bash` (SHA-256, release-notes digest, and the
+  attestation when `gh` is signed in), show what they will write, and write
+  only after the user confirmed.
+- The widget's other written fact is the Get started card's own state: the
+  `onboardingDismissed` flag in the layout file. The onboarding record is
+  written by `tools/onboard`, never by QML.
 
 ## Layout of the code
 

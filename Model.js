@@ -215,7 +215,9 @@ function buildRows(hosts, clocks, now, thresholdMs) {
         createdAt: parseTime(s.createdAt),
         updatedAt: parseTime(s.updatedAt),
         waitingSince: state === "needs" ? (waitingSince[key] || clocks.needs[key] || 0) : 0,
-        stale: !hh.reachable
+        stale: !hh.reachable,
+        onboardMode: clip(s.onboardMode, 20),
+        onboardState: clip(s.onboardState, 20)
       })
     }
   }
@@ -382,6 +384,56 @@ function stateIndex(rows) {
   return map
 }
 
+// --- Get started card -----------------------------------------------------
+
+// The assistant's own preference order (pohunek assistant/src/launch.rs).
+var ASSISTANT_RANK = ["pohunek-assistant", "codex", "claude", "hermes"]
+
+// Agents that can run the onboard session, from `host inspect local --json`:
+// available, not refused by the version policy and not shell-based, the rule
+// of pohunek's assistant/src/host.rs, in the assistant's preference order.
+function onboardAgents(inspect) {
+  var runtimes = inspect && Array.isArray(inspect.runtimes) ? inspect.runtimes : []
+  var out = []
+  for (var i = 0; i < runtimes.length && out.length < 50; i++) {
+    var r = runtimes[i]
+    if (!r || !validSessionId(r.agent) || r.available !== true || r.supported === false) continue
+    if (r.agent === "shell" || r.agent_base === "shell" || out.indexOf(r.agent) >= 0) continue
+    out.push(r.agent)
+  }
+  function rank(a) { var k = ASSISTANT_RANK.indexOf(a); return k < 0 ? ASSISTANT_RANK.length : k }
+  return out.sort(function(a, b) { return rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0) })
+}
+
+// Whether the onboarding record tools/onboard wrote names the session it
+// started. A record without one is a run whose session never started.
+function onboardingRecordLaunched(text) {
+  var doc = null
+  try { doc = JSON.parse(String(text || "")) } catch (e) { return false }
+  return !!doc && typeof doc === "object" && doc.schema === 1 && validSessionId(doc.session_id)
+}
+
+// State of the Get started card. facts: { installed, recordPresent (an
+// onboarding record that names its session, see onboardingRecordLaunched),
+// dismissed (Not now), again (Run onboarding again), rows }. An onboard session is a live row of this machine whose
+// `onboard.mode` is set and whose agent has not set `onboard.state=done`;
+// it wins over every other fact except a missing pohunek.
+function onboardingCard(facts) {
+  var f = facts || {}
+  if (!f.installed) return { state: "missing", target: "" }
+  var rows = f.rows || [], running = null
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i]
+    if (r.host !== "local" || r.stale || r.ownerState === "ended" || !r.onboardMode || r.onboardState === "done") continue
+    if (!running || r.updatedAt > running.updatedAt) running = r
+  }
+  if (running) return { state: "running", target: running.target }
+  if (f.again) return { state: "ready", target: "" }
+  if (f.dismissed) return { state: "dismissed", target: "" }
+  if (f.recordPresent) return { state: "done", target: "" }
+  return { state: "ready", target: "" }
+}
+
 // --- Pickers ---------------------------------------------------------------
 
 function projects(rows, recent) {
@@ -478,6 +530,7 @@ if (typeof module !== "undefined") {
     summary: summary, newAttention: newAttention, stateIndex: stateIndex, projects: projects,
     groupNames: groupNames, ageParts: ageParts, pushRecent: pushRecent, filterCount: filterCount,
     fuzzyScore: fuzzyScore, fuzzyFilter: fuzzyFilter, FUZZY_THRESHOLD: FUZZY_THRESHOLD,
+    onboardAgents: onboardAgents, onboardingCard: onboardingCard, onboardingRecordLaunched: onboardingRecordLaunched,
     INBOX: INBOX, NEEDS_YOU: NEEDS_YOU
   }
 }

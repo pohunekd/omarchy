@@ -160,6 +160,38 @@ ShellRoot {
       check("Enter on a group header collapses it", barPanel.sectionList[1].collapsed, !collapsedBefore)
       svc.toggleCollapsed(barPanel.sectionList[1].id)
 
+      console.log("get started card")
+      var card = findAll(barPanel.panelContent, function(i) { try { return i.isOnboardCard === true } catch (e) { return false } })[0]
+      check("card exists", card !== undefined, true)
+      svc.onboardingRecordPresent = false
+      check("card ready without a record", svc.onboarding.state, "ready")
+      check("ready card shows", card ? card.visible : false, true)
+      svc.onboardAgents = ["codex", "claude"]
+      check("picker preselects the first agent", card ? card.pickedAgent : "", "codex")
+      svc.dismissOnboarding()
+      check("Not now dismisses", svc.onboarding.state, "dismissed")
+      check("dismissed card hides", card ? card.visible : true, false)
+      svc.onboardAgain()
+      check("Run onboarding again shows it", svc.onboarding.state, "ready")
+      svc.onboardingAgain = false
+      svc.onboardingRecordPresent = true
+      svc.saveLayout(Object.assign({}, svc.layout, { onboardingDismissed: false }))
+      check("record and no session: done", svc.onboarding.state, "done")
+      check("done card hides", card ? card.visible : true, false)
+      svc.applySnapshot(JSON.stringify({ installed: true, hosts: [
+        { target: "local", label: "workstation", local: true, reachable: true, notifications: [], sessions: [
+          session("s-on", { onboardMode: "guided" }) ] } ] }), 0)
+      check("onboard session: running", svc.onboarding.state, "running")
+      check("running card shows", card ? card.visible : false, true)
+      check("Open targets the onboard session", svc.onboarding.target, "s-on")
+      check("onboard tool arguments are validated",
+            [svc.toolArgsValid("onboard", ["--launch-only", "--agent", "claude"]),
+             svc.toolArgsValid("onboard", ["--agent", "x'; rm -rf ~"]),
+             svc.toolArgsValid("onboard", ["--yes"])].join(","), "true,false,false")
+      svc.applySnapshot("", 127)
+      check("no pohunek: missing", svc.onboarding.state, "missing")
+      check("missing card shows", card ? card.visible : false, true)
+
       console.log(failures === 0 ? "ALL OK" : failures + " FAILED")
     }
 

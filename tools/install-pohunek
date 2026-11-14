@@ -23,8 +23,9 @@ for arg in "$@"; do
   esac
 done
 
-REPO="zajca/pohunek"
-API="https://api.github.com/repos/$REPO/releases/latest"
+here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=tools/verified-download.bash
+source "$here/verified-download.bash"
 
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 die() { printf '\n\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
@@ -46,32 +47,21 @@ if command -v pohunek >/dev/null 2>&1 && pohunek health --json >/dev/null 2>&1; 
   exit 0
 fi
 
-say "Looking up the latest pohunek release…"
-release=$(curl -fsSL --max-time 30 "$API") || die "Could not reach GitHub."
-tag=$(jq -r '.tag_name' <<<"$release")
-version=${tag#v}
-[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$ ]] || die "Unexpected release tag: $tag"
-archive="pohunek-daemon-${version}-x86_64-unknown-linux-gnu.tar.gz"
-base="https://github.com/$REPO/releases/download/$tag"
-echo "Release $tag: $archive"
-
+vd_init || die "Cannot download releases here."
 work=$(mktemp -d -t pohunek-install.XXXXXX)
 trap 'rm -rf "$work"' EXIT
 cd "$work"
 
+say "Looking up the latest pohunek release…"
+vd_latest_core "$work" || die "Could not reach GitHub."
+version=$VD_CORE_VERSION
+
 say "Downloading and verifying…"
-curl -fL --progress-bar --max-time 600 -o "$archive" "$base/$archive"
-curl -fsSL --max-time 30 -o "$archive.sha256" "$base/$archive.sha256"
-sha256sum -c "$archive.sha256" || die "Checksum mismatch: not installing."
-if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  gh attestation verify "$archive" --repo "$REPO" >/dev/null || die "Attestation check failed: not installing."
-  echo "GitHub build attestation: verified."
-else
-  echo "GitHub build attestation: skipped (gh is not signed in). The installer still verifies the archive MANIFEST."
-fi
+vd_fetch_core "$work" || die "Verification failed: not installing."
+vd_gh_ready || echo "The installer still verifies the archive MANIFEST."
 
 mkdir extract
-tar -xzf "$archive" -C extract
+tar -xzf "$VD_CORE_ARCHIVE" -C extract
 dir="extract/pohunek-daemon-${version}-x86_64-unknown-linux-gnu"
 [[ -x $dir/pohunek && -x $dir/packaging/install-daemon.sh ]] || die "The archive does not have the expected layout."
 

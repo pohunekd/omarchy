@@ -25,9 +25,11 @@
 omarchy plugin add https://github.com/pohunekd/omarchy --enable
 ```
 
-That is the whole install. No pohunek on the machine yet? The panel offers
-**Install pohunek**: it fetches the latest release, verifies it, shows what
-will be written where, and asks once.
+That is the whole install. No pohunek on the machine yet? The panel's
+**Get started** card offers **Set up pohunek**: it fetches the latest release,
+verifies it, shows everything it will change, asks once, and then starts an
+onboard manager that walks you through your projects, groups, agent profiles
+and hooks, one proposal at a time.
 
 ## Requirements
 
@@ -35,7 +37,7 @@ will be written where, and asks once.
 |---|---|---|
 | [Omarchy](https://omarchy.org) with the Quattro shell | the plugin host | Quickshell is part of the Omarchy shell; the plugin ships no copy of it |
 | `python3` | `fetch.py`, the session snapshot | standard library only, nothing to `pip install` |
-| the [`pohunek`](https://pohunek.dev) CLI and its daemon | every session, on this machine and on any host you follow | the widget is a client and owns no session state; **Install pohunek** in the panel (or `tools/install-pohunek`) installs it with a checksum and attestation check |
+| the [`pohunek`](https://pohunek.dev) CLI and its daemon | every session, on this machine and on any host you follow | the widget is a client and owns no session state; **Set up pohunek** in the panel (`tools/onboard`) or `tools/install-pohunek` installs it with a checksum and attestation check; onboarding needs pohunek 0.42.0 or newer |
 
 Optional, each used by one feature only: `gh` (verifies the build attestation
 while installing pohunek), `herdr` (the machine list behind **Install there**
@@ -59,7 +61,10 @@ you run them, and their changes are undone by hand:
 | **Add these shortcuts to Hyprland** / `tools/add-shortcuts` | `~/.config/hypr/bindings.lua` (a `.bak.<time>` copy is kept) | delete the `-- pohunek` comment and the two `o.bind` lines after it |
 | **Set up network** / `tools/setup-network` | `~/.config/pohunek/overlays.toml`; the NetBird or Tailscale client (AUR `netbird-bin` with a system service, or Omarchy's tailscale service); a joined overlay network | restore your overlay choice; leave the network with `netbird down` or `sudo tailscale down`; remove the client with your package manager or `omarchy` if you do not use it otherwise |
 | **Roll out** / `tools/distribute` | on each target machine over SSH: this plugin, pohunek, and `overlays.toml` | remove them there the same way |
-| **Install pohunek** / `tools/install-pohunek` | the pohunek daemon and CLI (a user service); only when you answer yes, pohunek's agent hooks in `~/.claude` and `~/.codex` | pohunek is a separate program: remove it and its hooks as [pohunek.dev](https://pohunek.dev) describes (`pohunek integration --help` and `pohunek integration doctor` show what is installed) |
+| **Install pohunek** / `tools/install-pohunek`, **Set up pohunek** / `tools/onboard` | the pohunek daemon and CLI (a user service, through `pohunek setup`); only when you answer yes, pohunek's agent hooks in `~/.claude` and `~/.codex` | pohunek is a separate program: remove it and its hooks as [pohunek.dev](https://pohunek.dev) describes (`pohunek integration --help` and `pohunek integration doctor` show what is installed) |
+| **Get started** / `tools/onboard` | the onboarding record `~/.local/state/omarchy/pohunek-onboarding.json` (mode 0600: run id, your choices, project ids, profile names with file digests, hook state; no secrets, no session content) | delete the file; the card then offers onboarding again |
+| **Get started** / `tools/onboard`, when `pohunek setup` cannot install it | the assistant package `pohunek.context.assistant`, verified against its `SHA256SUMS`, the core release notes and, with `gh` signed in, its build attestation | `pohunek plugin uninstall pohunek.context.assistant --yes` (refused while a session uses it) |
+| **Get started** / `tools/onboard`, per agent home you tick | pohunek's hooks in that agent home (all homes start unticked) | `pohunek integration uninstall --agent <agent>`, with `--profile <name>` for a profile's home |
 
 ---
 
@@ -229,12 +234,28 @@ IPC for your own bindings: `omarchy-shell pohunek.sessions toggle | newSession |
   when `gh` is signed in, its GitHub build attestation, then hands over to the
   release's own installer, which verifies its MANIFEST. Agent hooks are offered,
   never installed silently.
+- **Onboarding asks once.** `tools/onboard` shows the `pohunek setup --dry-run`
+  plan, the agent homes for hooks (all unticked) and the assistant package it
+  would install when setup cannot (checked against `SHA256SUMS`, the digest in
+  the core release notes and, when `gh` is signed in, its build attestation),
+  then asks once; nothing is written before that yes. It never uses `sudo` and
+  never changes your network.
+- **What the guided onboard session is told, and what enforces it.** Its
+  fixed request tells it to read pohunek metadata only (projects, sessions,
+  profiles and hooks; agent history paths only with your consent), never
+  transcripts or credentials, to act on this machine only, and to ask you in
+  the conversation before each change. That is an instruction, not a control:
+  the session runs with your agent's default profile, so in guided mode its
+  commands are held back only by your agent's own permission prompts. The tool
+  itself writes nothing before your one yes; beyond what `pohunek setup`
+  applies, it adds only the onboarding record and, when setup cannot, the
+  verified assistant package.
 
 ## Troubleshooting
 
 | You see | Try |
 |---|---|
-| dimmed icon, "not installed" | panel → **Install pohunek** |
+| dimmed icon, "not installed" | panel → **Set up pohunek** |
 | dimmed icon, "not reachable" | panel → **Run pohunek doctor**, or `pohunek service status` |
 | a host is missing | Hosts → **Set up network**; every machine must use the same overlay |
 | a host's rows are dimmed | it dropped off the network; its last rows stay until it is back |
@@ -246,7 +267,8 @@ IPC for your own bindings: `omarchy-shell pohunek.sessions toggle | newSession |
 git clone https://github.com/pohunekd/omarchy ~/.config/omarchy/plugins/pohunek.sessions
 omarchy bar set pohunek.sessions command ~/.config/omarchy/plugins/pohunek.sessions/tools/demo-pohunek   # synthetic sessions
 node tests/model.test.js       # every decision: owner states, groups, filters, fuzzy search
-python3 tests/qml_check.py     # loads the real widget offscreen in Quickshell, 39 checks
+python3 tests/qml_check.py     # loads the real widget offscreen in Quickshell, 54 checks
+python3 -I tests/onboard_test.py  # tools/onboard scenarios against tools/demo-pohunek
 omarchy restart shell          # pick up QML changes
 scripts/gates                  # every check CI runs, one exit code per gate
 ```
@@ -260,7 +282,7 @@ in [docs/releasing.md](docs/releasing.md).
 | `Model.js` | every decision, pure and tested |
 | `Service.qml` | polling, actions through the pohunek CLI |
 | `Panel.qml` | the bar icon and the panel |
-| `tools/` | install, network, distribute, shortcuts, demo |
+| `tools/` | onboarding, install, network, distribute, shortcuts, demo |
 | `i18n/` | English and Czech; add a language with one JSON file |
 
 ## Credits

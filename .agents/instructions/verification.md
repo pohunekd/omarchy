@@ -10,9 +10,11 @@
 3. `manifest`: `tests/manifest_check.py`
 4. `symlinks`: no tracked symlink (git mode 120000); `tests/symlinks_test.py` covers it
 5. `shell`: `bash -n` and `shellcheck` on the bash scripts
-6. `changelog`: `scripts/changelog check`
-7. `changelog-tests`: `tests/changelog_test.py`
-8. `qml`: `tests/qml_check.py`, only when `quickshell` and the Omarchy shell
+6. `onboard`: `tests/onboard_test.py`, the scenarios of `tools/onboard` and the
+   shared verified download against `tools/demo-pohunek`
+7. `changelog`: `scripts/changelog check`
+8. `changelog-tests`: `tests/changelog_test.py`
+9. `qml`: `tests/qml_check.py`, only when `quickshell` and the Omarchy shell
    exist; otherwise it is `not run`
 
 CI runs the same set except `qml`, plus the `site` job. A change under `site/`
@@ -29,7 +31,9 @@ only for:
 
 - **Non-trivial pure logic** where a bug is silent and costly: owner state,
   Needs you ordering, grouping, badges, filters (`tests/model.test.js`);
-  `fetch.py` output against `tools/demo-pohunek`; the changelog tool
+  `fetch.py` output against `tools/demo-pohunek`; the consent and
+  verification order of `tools/onboard` (`tests/onboard_test.py`, against
+  `tools/demo-pohunek` with a private `HOME` and local release fixtures); the changelog tool
   (`tests/changelog_test.py`).
 - **A fixed bug in such logic**, as a regression test that fails without the
   fix. No regression test for a QML glitch or a one-line fix.

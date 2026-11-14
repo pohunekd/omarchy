@@ -56,7 +56,18 @@ Item {
 
   // ---- owner layout (view, collapsed sections, own groups, recent projects) ----
   readonly property string layoutPath: Quickshell.env("HOME") + "/.local/state/omarchy/pohunek-layout.json"
-  property var layout: ({ view: "groups", collapsed: {}, groups: [], recentProjects: [] })
+  property var layout: ({ view: "groups", collapsed: {}, groups: [], recentProjects: [], onboardingDismissed: false })
+
+  // ---- Get started card ----
+  // tools/onboard writes the record; the widget reads only whether it names
+  // the session it started (a failed launch leaves the card at ready).
+  readonly property string onboardingRecordPath: Quickshell.env("HOME") + "/.local/state/omarchy/pohunek-onboarding.json"
+  property bool onboardingRecordPresent: false
+  property bool onboardingAgain: false   // Help → Run onboarding again, until the next start
+  property var onboardAgents: []         // Model.onboardAgents of `host inspect local --json`
+  readonly property var onboarding: Model.onboardingCard({
+    installed: installed, recordPresent: onboardingRecordPresent, dismissed: !!layout.onboardingDismissed,
+    again: onboardingAgain, rows: rows })
 
   // ---- action feedback ----
   property string banner: ""
@@ -85,20 +96,58 @@ Item {
 
   function validSshTarget(t) { return typeof t === "string" && /^[A-Za-z0-9._@:-]{1,128}$/.test(t) && t[0] !== "-" }
 
+  // The `command` setting's own pattern.
+  function validCommandPath(c) { return typeof c === "string" && /^[A-Za-z0-9._\/~+-]{1,256}$/.test(c) && c[0] !== "-" }
+
   // The helper scripts in tools/, each in Omarchy's floating terminal (the
-  // one its own installers use). Only these names, and only a validated SSH
-  // target as an argument, ever reach the command line.
-  readonly property var tools: ["install-pohunek", "setup-network", "distribute", "add-shortcuts", "doctor"]
-  function runTool(name, arg) {
-    if (tools.indexOf(name) < 0 || !/^\/[A-Za-z0-9._\/-]+$/.test(pluginDir)) return
+  // one its own installers use). Only these names, and only arguments that
+  // pass toolArgsValid, ever reach the command line.
+  readonly property var tools: ["install-pohunek", "setup-network", "distribute", "add-shortcuts", "doctor", "onboard"]
+  // onboard takes --launch-only, --agent <name> and --command <path>; the
+  // others at most one validated SSH target. No accepted value holds a quote
+  // or a space, so single quotes keep each one a single word.
+  function toolArgsValid(name, args) {
+    if (name !== "onboard") return args.length === 0 || (args.length === 1 && validSshTarget(args[0]))
+    for (var i = 0; i < args.length; i++) {
+      if (args[i] === "--launch-only") continue
+      if (args[i] === "--agent" && i + 1 < args.length && Model.validSessionId(args[i + 1])) { i++; continue }
+      if (args[i] === "--command" && i + 1 < args.length && validCommandPath(args[i + 1])) { i++; continue }
+      return false
+    }
+    return true
+  }
+  function runTool(name, args) {
+    var list = args === undefined || args === "" ? [] : (Array.isArray(args) ? args : [args])
+    if (tools.indexOf(name) < 0 || !/^\/[A-Za-z0-9._\/-]+$/.test(pluginDir) || !toolArgsValid(name, list)) {
+      say(t("msg.toolRefused", "%1 did not start: the plugin folder, the command setting or an argument holds characters a terminal command cannot carry").arg(name), true)
+      return
+    }
     var line
     if (name === "doctor") line = "'" + root.command.replace(/'/g, "") + "' doctor"
     else line = "'" + pluginDir + "/tools/" + name + "'"
-    if (arg !== undefined && arg !== "") {
-      if (!validSshTarget(arg)) return
-      line += " '" + arg + "'"
-    }
+    for (var i = 0; i < list.length; i++) line += " '" + list[i] + "'"
     Quickshell.execDetached(["omarchy-launch-floating-terminal-with-presentation", line])
+  }
+
+  // The card runs nothing by itself: it opens tools/onboard, which shows
+  // every change and asks before it writes.
+  function startOnboarding(launchOnly, agent) {
+    var args = launchOnly ? ["--launch-only"] : []
+    if (agent) args.push("--agent", agent)
+    if (root.command !== "pohunek") args.push("--command", root.command)
+    onboardingAgain = false
+    runTool("onboard", args)
+  }
+  function dismissOnboarding() { saveLayout(Object.assign({}, layout, { onboardingDismissed: true })) }
+  function onboardAgain() {
+    saveLayout(Object.assign({}, layout, { onboardingDismissed: false }))
+    onboardingAgain = true
+    loadOnboardAgents()
+  }
+  // Read when the card is shown (panel open), not on the snapshot poll.
+  function loadOnboardAgents() {
+    if (!installed || onboardAgentsProc.running) return
+    onboardAgentsProc.begin([root.command, "host", "inspect", "local", "--json"])
   }
 
   signal attentionNeeded(var row)
@@ -234,7 +283,8 @@ Item {
     site: "https://pohunek.dev/",
     docs: "https://pohunek.dev/docs/",
     surfaces: "https://pohunek.dev/surfaces/",
-    source: "https://github.com/zajca/pohunek"
+    source: "https://github.com/zajca/pohunek",
+    remove: "https://github.com/pohunekd/omarchy#remove"
   })
   function openWeb(which) {
     var url = webLinks[which]
@@ -334,7 +384,11 @@ Item {
     formProc.begin(["python3", "-I", pluginDir + "/fetch.py", "--bin", root.command, "--form", h])
   }
 
-  onPanelOpenChanged: if (panelOpen) refresh(false)
+  onPanelOpenChanged: if (panelOpen) {
+    refresh(false)
+    onboardingRecord.reload()
+    if (onboarding.state === "ready") loadOnboardAgents()
+  }
   onExtraHostsChanged: refresh(false)
   onDiscoverChanged: refresh(false)
   Component.onCompleted: refresh(true)
@@ -372,10 +426,21 @@ Item {
           view: parsed.view === "state" ? "state" : "groups",
           collapsed: parsed.collapsed && typeof parsed.collapsed === "object" ? parsed.collapsed : {},
           groups: Array.isArray(parsed.groups) ? parsed.groups.map(String).slice(0, 100) : [],
-          recentProjects: Array.isArray(parsed.recentProjects) ? parsed.recentProjects.map(String).slice(0, 8) : []
+          recentProjects: Array.isArray(parsed.recentProjects) ? parsed.recentProjects.map(String).slice(0, 8) : [],
+          onboardingDismissed: parsed.onboardingDismissed === true
         }
       } catch (e) { }
     }
+  }
+
+  FileView {
+    id: onboardingRecord
+    path: root.onboardingRecordPath
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.onboardingRecordPresent = Model.onboardingRecordLaunched(text())
+    onLoadFailed: function(error) { root.onboardingRecordPresent = false }
   }
 
   // Exit and end-of-stream arrive in either order; apply once both have.
@@ -404,6 +469,15 @@ Item {
   CliProcess {
     id: fetchProc
     onFinished: function(out, code) { root.applySnapshot(out, code) }
+  }
+
+  CliProcess {
+    id: onboardAgentsProc
+    onFinished: function(out, code) {
+      var doc = null
+      try { doc = JSON.parse(out) } catch (e) { }
+      root.onboardAgents = code === 0 && doc && doc.ok ? Model.onboardAgents(doc.ok) : []
+    }
   }
 
   CliProcess {
