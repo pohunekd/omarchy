@@ -415,12 +415,125 @@ Panel {
           }
         }
 
-        // Setup / offline states.
+        // Get started. The card only opens tools/onboard in a floating
+        // terminal; the tool shows every change and asks before it writes.
+        Rectangle {
+          id: onboardCard
+          readonly property bool isOnboardCard: true
+          readonly property string cardState: pohunek.onboarding.state
+          readonly property var agents: pohunek.onboardAgents
+          property string agent: ""
+          readonly property string pickedAgent: agents.indexOf(agent) >= 0 ? agent : (agents.length > 0 ? agents[0] : "")
+          Layout.fillWidth: true
+          Layout.topMargin: Style.space(6)
+          Layout.bottomMargin: Style.space(6)
+          visible: pohunek.loaded && (cardState === "missing" || cardState === "running"
+                                      || (cardState === "ready" && pohunek.counts.state !== "offline"))
+          implicitHeight: cardColumn.implicitHeight + Style.space(20)
+          radius: Style.cornerRadius
+          color: root.chipFill
+          border.width: 1
+          border.color: root.hairline
+
+          ColumnLayout {
+            id: cardColumn
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(10)
+            spacing: Style.space(6)
+
+            Label {
+              Layout.fillWidth: true
+              text: onboardCard.cardState === "running" ? root.t("onboard.running") : root.t("onboard.title")
+              font.weight: Font.DemiBold
+            }
+            Label {
+              Layout.fillWidth: true
+              visible: onboardCard.cardState !== "running"
+              text: onboardCard.cardState === "missing" ? root.t("onboard.missingText") : root.t("onboard.readyText")
+              color: root.dim
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+              elide: Text.ElideNone
+            }
+            // Only agents that can run the session; hidden when one or none can.
+            Flow {
+              Layout.fillWidth: true
+              visible: onboardCard.cardState === "ready" && onboardCard.agents.length > 1
+              spacing: Style.space(6)
+              Label { text: root.t("onboard.agent"); color: root.dim; font.pixelSize: Style.font.bodySmall }
+              Repeater {
+                model: onboardCard.agents
+                Chip {
+                  required property var modelData
+                  text: modelData
+                  selected: modelData === onboardCard.pickedAgent
+                  onClicked: onboardCard.agent = modelData
+                }
+              }
+            }
+            Flow {
+              Layout.fillWidth: true
+              spacing: Style.space(8)
+              Button {
+                visible: onboardCard.cardState === "missing"
+                text: root.t("onboard.setUp")
+                bordered: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: { pohunek.startOnboarding(false, ""); root.close() }
+              }
+              Button {
+                visible: onboardCard.cardState === "ready"
+                text: root.t("onboard.start")
+                bordered: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: {
+                  pohunek.startOnboarding(true, onboardCard.agents.length > 1 ? onboardCard.pickedAgent : "")
+                  root.close()
+                }
+              }
+              Button {
+                visible: onboardCard.cardState === "running"
+                text: root.t("onboard.open")
+                bordered: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: { pohunek.attach({ target: pohunek.onboarding.target }); root.close() }
+              }
+              Button {
+                visible: onboardCard.cardState !== "running"
+                text: root.t("onboard.whatChanges")
+                foreground: Commons.Color.accent
+                fontFamily: root.fontFamily
+                onClicked: { pohunek.openWeb("remove"); root.close() }
+              }
+              Button {
+                visible: onboardCard.cardState === "ready"
+                text: root.t("onboard.notNow")
+                foreground: Commons.Color.accent
+                fontFamily: root.fontFamily
+                onClicked: pohunek.dismissOnboarding()
+              }
+              Button {
+                visible: onboardCard.cardState === "missing"
+                text: root.t("setup.network")
+                foreground: Commons.Color.accent
+                fontFamily: root.fontFamily
+                onClicked: { pohunek.runTool("setup-network"); root.close() }
+              }
+            }
+          }
+        }
+
+        // Offline state: the daemon does not answer.
         Label {
           Layout.fillWidth: true
           Layout.topMargin: Style.space(24)
-          visible: pohunek.loaded && (pohunek.counts.state === "missing" || pohunek.counts.state === "offline")
-          text: pohunek.counts.state === "missing" ? root.t("setup.notInstalled") : root.t("setup.offline")
+          visible: pohunek.loaded && pohunek.counts.state === "offline"
+          text: root.t("setup.offline")
           color: root.dim
           wrapMode: Text.WordWrap
           horizontalAlignment: Text.AlignHCenter
@@ -428,14 +541,14 @@ Panel {
         RowLayout {
           Layout.alignment: Qt.AlignHCenter
           Layout.topMargin: Style.space(10)
-          visible: pohunek.loaded && (pohunek.counts.state === "missing" || pohunek.counts.state === "offline")
+          visible: pohunek.loaded && pohunek.counts.state === "offline"
           spacing: Style.space(8)
           Button {
-            text: pohunek.counts.state === "missing" ? root.t("setup.install") : root.t("setup.doctor")
+            text: root.t("setup.doctor")
             bordered: true
             foreground: root.foreground
             fontFamily: root.fontFamily
-            onClicked: { pohunek.runTool(pohunek.counts.state === "missing" ? "install-pohunek" : "doctor"); root.close() }
+            onClicked: { pohunek.runTool("doctor"); root.close() }
           }
           Button {
             text: root.t("setup.network")
@@ -1557,6 +1670,14 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             onClicked: { pohunek.runTool("add-shortcuts"); root.close() }
+          }
+          Button {
+            visible: pohunek.installed
+            text: root.t("help.onboardAgain")
+            bordered: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: { pohunek.onboardAgain(); root.page = "list" }
           }
 
           // What the colours mean.
