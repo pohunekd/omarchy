@@ -115,7 +115,7 @@ $in.record as $r | $in.diff as $d0 | $in.bound as $bound | $in.now as $now | ($i
                     argv: uninstall(.i; false), skill_too: .takes_skill, agent: .i.agent, home_profile: .i.profile}} end] as $hooks
 | [$hooks[] | .action? // empty] as $hook_actions
 | ([$hook_actions[] | select(.agent == "codex" and .home_profile == null and .skill_too)] | length > 0) as $codex_skill_covered
-| [$homes[] | select(.i.skill and .i.agent != "codex")
+| ([$homes[] | select(.i.skill and .i.agent != "codex")
    | . as $h | ([$hook_actions[] | select(.agent == $h.i.agent and .home_profile == $h.i.profile and .skill_too)] | length > 0) as $covered
    | if $covered then empty
      elif ($bound | not) then (if .skill_now then {kept: cannot_prove("agent skill in \(home(.i))")} else empty end)
@@ -127,7 +127,7 @@ $in.record as $r | $in.diff as $d0 | $in.bound as $bound | $in.now as $now | ($i
           [{action: {key: "skill:codex:", label: "agent skill of Codex (shared by every Codex home)",
                      argv: uninstall({agent: "codex", profile: null}; true)}}]
         else [{gone: "agent skill of Codex"}] end)
-     else [] end) as $skills
+     else [] end)) as $skills
 # ---- groups
 | [$d.groups_set[] | . as $g | ($sessions | map(select(.id == $g.session_id)) | first) as $row
    | if ($g0 | has($g.session_id) | not) or $g0[$g.session_id] != null
@@ -160,6 +160,6 @@ $in.record as $r | $in.diff as $d0 | $in.bound as $bound | $in.now as $now | ($i
     kept: ([$proj[], $profs[], $hooks[], $skills[], $groups[] | .kept? // empty] + $replaced
            + [$d.integrations[] | select(.profile != null and (.profile as $n | $names | index($n) | not))
               | "hooks in \(home(.)): the profile is gone, so pohunek cannot reach its home; remove them by hand"]),
-    refused: [$proj[], $profs[], $groups[] | .refused? // empty] + $int_refused,
+    refused: ([$proj[], $profs[], $groups[] | .refused? // empty] + $int_refused),
     gone: [$proj[], $profs[], $hooks[], $skills[], $groups[] | .gone? // empty]
   }
