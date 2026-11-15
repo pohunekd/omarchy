@@ -1,26 +1,49 @@
 #!/usr/bin/env bash
-# Onboards this machine to pohunek in guided mode. Run by the widget's
-# Get started card in a floating terminal; safe to run by hand.
+# Onboards this machine to pohunek. Run by the widget's Get started card in a
+# floating terminal; safe to run by hand.
 #
 # Without --launch-only it installs or completes pohunek: it reads
 # `pohunek setup --dry-run --json` (on a fresh machine from the latest verified
-# release archive), asks which agent homes get hooks and whether the onboard
-# manager may read agent history metadata, shows everything it will change,
-# and asks once. Then it runs `pohunek setup`, installs the verified assistant
-# package when setup cannot, writes the onboarding record and starts the onboard
-# session, which proposes each change and waits for you.
+# release archive), asks which agent homes get hooks (and the agent skill),
+# whether the onboard manager may read agent history metadata, and the mode,
+# shows everything it will change, and asks once. Then it runs `pohunek setup`,
+# installs the verified assistant package when setup cannot, writes the
+# onboarding record and starts the onboard session. In guided mode the session
+# proposes each change and waits for you; in automatic mode it applies the
+# items you granted, under the `pohunek-onboard` profile that allows exactly
+# those commands. --undo reverses what the recorded run added.
 #
 #   --launch-only    pohunek is set up already: skip the download and setup
+#   --mode MODE      automatic or guided (asked when not given; --yes: guided)
 #   --agent NAME     the agent (or host profile) that runs the onboard session
 #   --command PATH   the pohunek CLI to use (default: pohunek on PATH)
-#   --yes            no questions; hooks only with --hooks, history only with --history yes
+#   --yes            no questions; hooks only with --hooks, the skill only with
+#                    --skill, history only with --history yes, and automatic
+#                    mode only with --grant
 #   --hooks LIST     with --yes: `none` or agent homes as agent[:profile],...
+#   --skill LIST     with --yes: `none` or homes of --hooks that also get the agent skill
 #   --history yes|no with --yes: the history-metadata consent (default no)
+#   --grant LIST     with --yes and --mode automatic: `none` or grant ids,...
+#   --wait, --no-wait  after the launch, keep this window open until the onboard
+#                    session ends and record what the run changed (default: wait,
+#                    with --yes: no wait)
+#   --undo           reverse the recorded run (with --yes: the list only, never
+#                    the assistant package or the service)
 #
 # Never passes --accept-runtime-loss, --stop-sessions or --purge; never sudo.
 set -euo pipefail
 
 MIN_VERSION="0.42.0"
+# The onboarding guide that automatic mode's grant and floor follow ships in
+# the 0.43.0 assistant bundle, with `plugin profile rm` for Undo.
+AUTO_VERSION="0.43.0"
+PROFILE_RM_VERSION="0.43.0"
+ONBOARD_PROFILE="pohunek-onboard"
+GRANT_IDS=(projects groups profiles profile-hooks cli-update)
+# Watching the onboard session end: poll interval, and how many failed reads
+# in a row end the watch.
+WAIT_POLL_SECONDS=2
+WAIT_MAX_FAILURES=5
 RECORD_DIR="${HOME:-}/.local/state/omarchy"
 RECORD="$RECORD_DIR/pohunek-onboarding.json"
 AGENT_RE='^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -32,6 +55,8 @@ ID_RE='^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
 JQ_CLEAN='def clean: tostring | gsub("[[:cntrl:]]"; " ");'
 
 here=$(cd "$(dirname "$0")" && pwd)
+DIFF_JQ="$here/onboard-diff.jq"
+UNDO_JQ="$here/onboard-undo.jq"
 # shellcheck source=tools/verified-download.bash
 source "$here/verified-download.bash"
 
@@ -43,46 +68,91 @@ ask() {
   read -r -p "$1 [y/N] " answer || return 1
   [[ $answer == [yY]* ]]
 }
+ask_default_yes() {
+  local answer
+  read -r -p "$1 [Y/n] " answer || return 1
+  [[ $answer != [nN]* ]]
+}
 
 LAUNCH_ONLY=0
 ASSUME_YES=0
+UNDO=0
 AGENT=""
 COMMAND="pohunek"
 HOOKS_ARG=""
+SKILL_ARG=""
 HISTORY_ARG=""
+MODE_ARG=""
+GRANT_ARG=""
+GRANT_GIVEN=0
+WAIT_ARG=""
 while (( $# > 0 )); do
   case $1 in
   --launch-only) LAUNCH_ONLY=1 ;;
+  --wait) WAIT_ARG=yes ;;
+  --no-wait) WAIT_ARG=no ;;
   --yes | -y) ASSUME_YES=1 ;;
-  --agent | --command | --hooks | --history)
+  --undo) UNDO=1 ;;
+  --agent | --command | --hooks | --skill | --history | --mode | --grant)
     (( $# >= 2 )) || usage_error "$1 needs a value."
     case $1 in
     --agent) AGENT=$2 ;;
     --command) COMMAND=$2 ;;
     --hooks) HOOKS_ARG=$2 ;;
+    --skill) SKILL_ARG=$2 ;;
     --history) HISTORY_ARG=$2 ;;
+    --mode) MODE_ARG=$2 ;;
+    --grant) GRANT_ARG=$2; GRANT_GIVEN=1 ;;
     esac
     shift ;;
-  -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
+  -h | --help) sed -n '2,33p' "$0"; exit 0 ;;
   *) usage_error "unknown option: $1" ;;
   esac
   shift
 done
 
 [[ -z $AGENT || $AGENT =~ $AGENT_RE ]] || usage_error "Not an agent name: $AGENT"
+[[ $AGENT != "$ONBOARD_PROFILE" ]] || usage_error "$ONBOARD_PROFILE is the profile this tool writes for automatic mode; pick the agent that runs it."
 [[ $COMMAND =~ $COMMAND_RE && $COMMAND != -* ]] || usage_error "Not a command path: $COMMAND"
-if (( ! ASSUME_YES )) && [[ -n $HOOKS_ARG || -n $HISTORY_ARG ]]; then
-  usage_error "--hooks and --history go with --yes; without it the tool asks."
+if (( UNDO )) && [[ $LAUNCH_ONLY == 1 || -n $AGENT$HOOKS_ARG$SKILL_ARG$HISTORY_ARG$MODE_ARG$WAIT_ARG || $GRANT_GIVEN == 1 ]]; then
+  usage_error "--undo takes only --command and --yes."
+fi
+if (( ! ASSUME_YES )) && [[ -n $HOOKS_ARG$SKILL_ARG$HISTORY_ARG || $GRANT_GIVEN == 1 ]]; then
+  usage_error "--hooks, --skill, --history and --grant go with --yes; without it the tool asks."
 fi
 [[ -z $HISTORY_ARG || $HISTORY_ARG == yes || $HISTORY_ARG == no ]] || usage_error "--history is yes or no."
-if [[ -n $HOOKS_ARG && $HOOKS_ARG != none ]]; then
-  IFS=, read -r -a _homes <<<"$HOOKS_ARG"
-  for _home in "${_homes[@]}"; do
-    [[ $_home =~ $HOME_RE ]] || usage_error "--hooks takes none or agent[:profile],...: $HOOKS_ARG"
-  done
+[[ -z $MODE_ARG || $MODE_ARG == automatic || $MODE_ARG == guided ]] || usage_error "--mode is automatic or guided."
+for _list in "$HOOKS_ARG" "$SKILL_ARG"; do
+  if [[ -n $_list && $_list != none ]]; then
+    IFS=, read -r -a _homes <<<"$_list"
+    for _home in "${_homes[@]}"; do
+      [[ $_home =~ $HOME_RE ]] || usage_error "--hooks and --skill take none or agent[:profile],...: $_list"
+    done
+  fi
+done
+GRANT=()
+if (( GRANT_GIVEN )); then
+  [[ $MODE_ARG == automatic ]] || usage_error "--grant goes with --mode automatic."
+  if [[ $GRANT_ARG != none ]]; then
+    IFS=, read -r -a _ids <<<"$GRANT_ARG"
+    for _id in "${_ids[@]}"; do
+      _known=0
+      for _g in "${GRANT_IDS[@]}"; do [[ $_id == "$_g" ]] && _known=1; done
+      (( _known )) || usage_error "--grant takes none or ids from: ${GRANT_IDS[*]}"
+      GRANT+=("$_id")
+    done
+  fi
+elif (( ASSUME_YES )) && [[ $MODE_ARG == automatic ]]; then
+  usage_error "--mode automatic with --yes needs --grant (none or ids from: ${GRANT_IDS[*]}); no grant is implied."
 fi
-if (( LAUNCH_ONLY )) && [[ -n $HOOKS_ARG ]]; then
-  usage_error "--launch-only installs no hooks; drop --hooks."
+if (( LAUNCH_ONLY )) && [[ -n $HOOKS_ARG$SKILL_ARG ]]; then
+  usage_error "--launch-only installs no hooks and no agent skill; drop --hooks and --skill."
+fi
+if [[ -n $SKILL_ARG && $SKILL_ARG != none ]]; then
+  IFS=, read -r -a _homes <<<"$SKILL_ARG"
+  for _home in "${_homes[@]}"; do
+    [[ ,$HOOKS_ARG, == *",$_home,"* ]] || usage_error "--skill names $_home, which --hooks does not: the skill is installed together with that home's hooks."
+  done
 fi
 # Every question needs a terminal; without one only --yes runs, and it writes
 # nothing it was not told to.
@@ -93,7 +163,8 @@ fi
 for tool in jq mktemp od tar; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is required."
 done
-vd_init || die "Cannot download releases here."
+[[ -f $DIFF_JQ && -f $UNDO_JQ ]] || die "$DIFF_JQ or $UNDO_JQ is missing."
+if (( ! UNDO )); then vd_init || die "Cannot download releases here."; fi
 
 work=$(mktemp -d -t pohunek-onboard.XXXXXX)
 record_tmp=""
@@ -243,8 +314,14 @@ write_record() {
 }
 
 request_text() {
-  local text="Onboard this machine with me in guided mode. Look at what pohunek knows about this host: projects, sessions and their groups, agent profiles and hooks. Propose one change at a time: show the exact command, say what it does, and ask me in this conversation before you run it. A permission prompt of your agent CLI does not replace that question. Act on this machine only: never pass --host and never a <host>/<session-id> target. Never read transcripts, history files, credentials or profile secrets. If a pohunek command cannot reach the daemon from inside your sandbox, say so; that is not a sign that the daemon is down."
-  if [[ $1 == yes ]]; then
+  local history=$1 mode=$2 text
+  if [[ $mode == automatic ]]; then
+    text="Onboard this machine with me in automatic mode, following your onboarding guide. Apply without asking exactly the items whose grant id is in your session's onboard.grant metadata, and report every other change with its exact command instead of applying it. A new profile and new hook files still need my confirmation: ask me in this conversation before each, as the guide says. Never do anything on the guide's floor, whatever the grant."
+  else
+    text="Onboard this machine with me in guided mode. Look at what pohunek knows about this host: projects, sessions and their groups, agent profiles and hooks. Propose one change at a time: show the exact command, say what it does, and ask me in this conversation before you run it. A permission prompt of your agent CLI does not replace that question."
+  fi
+  text+=" Act on this machine only: never pass --host and never a <host>/<session-id> target. Never read transcripts, history files, credentials or profile secrets. If a pohunek command cannot reach the daemon from inside your sandbox, say so; that is not a sign that the daemon is down."
+  if [[ $history == yes ]]; then
     text+=" I consent to project proposals from agent history metadata: you may run \`pohunek project candidates --sources pohunek --sources history --json\`."
   else
     text+=" Propose projects only with \`pohunek project candidates --json\`; do not read agent history."
@@ -252,25 +329,297 @@ request_text() {
   printf '%s' "$text"
 }
 
-# Snapshot for the record: project ids, profile names with file digests, and
-# the hook and skill state of every agent home. Metadata only.
+# ------------------------------------------------------------------- grant
+grant_text() {
+  case $1 in
+  projects) echo "register the repositories it proposes as projects (pohunek project add)" ;;
+  groups) echo "put ungrouped sessions into a group (pohunek session metadata <id> --set companion.group=<name>)" ;;
+  profiles) echo "migrate profiles that need it (pohunek plugin profile migrate <name> --yes); a new profile only after it asks you" ;;
+  profile-hooks) echo "install hooks into the home of a profile it created in this run, after it asks you (pohunek integration install --agent <runtime> --profile <name>)" ;;
+  cli-update) echo "update the agent CLI with its own updater (claude update, codex update)" ;;
+  esac
+}
+
+granted() {
+  local id
+  for id in "${GRANT[@]}"; do [[ $id == "$1" ]] && return 0; done
+  return 1
+}
+
+# Asks for each grant item, every one on by default; the answers are confirmed
+# together with the rest of the preview.
+ask_grant() {
+  local id
+  GRANT=()
+  say "Automatic mode: the onboard agent applies these without asking you"
+  echo "Each item is on; answer n to turn one off. Everything you turn off is only reported, with its command."
+  for id in "${GRANT_IDS[@]}"; do
+    if ask_default_yes "  $id: $(grant_text "$id")?"; then GRANT+=("$id"); fi
+  done
+}
+
+# ------------------------------------------------- the pohunek-onboard profile
+# The launch profile of automatic mode, copied verbatim from the table
+# "Allowlist and floor" of docs/knowledge/guides/onboarding.md in pohunek
+# 0.43.0. The allow list holds the read-only rules, the rules of granted items
+# and the own onboard.state rule; the deny rules always apply.
+# The state rule keeps $POHUNEK_SESSION_ID unexpanded on purpose.
+# shellcheck disable=SC2016
+ALLOW_ALWAYS=(
+  'Bash(pohunek --version)'
+  'Bash(pohunek health --json)'
+  'Bash(pohunek doctor --json)'
+  'Bash(pohunek service status --json)'
+  'Bash(pohunek host inspect local --json)'
+  'Bash(pohunek plugin list --json)'
+  'Bash(pohunek plugin doctor --json)'
+  'Bash(pohunek plugin profile list --all --json)'
+  'Bash(pohunek integration status --all-profiles --json)'
+  'Bash(pohunek integration doctor --all-profiles --json)'
+  'Bash(pohunek project list --json)'
+  'Bash(pohunek session list --json)'
+  'Bash(pohunek project candidates --json)'
+  'Bash(pohunek session metadata "$POHUNEK_SESSION_ID" --set onboard.state=done)'
+)
+ALLOW_HISTORY='Bash(pohunek project candidates --sources pohunek --sources history --json)'
+DENY_NO_HISTORY='Bash(pohunek project candidates *history*)'
+DENY_BEFORE_HISTORY=(
+  'Bash(sudo *)'
+  'Bash(pohunek *--host*)'
+  'Bash(pohunek setup *)'
+  'Bash(pohunek service install *)'
+  'Bash(pohunek service upgrade *)'
+  'Bash(pohunek service uninstall *)'
+  'Bash(pohunek service refresh-path *)'
+  'Bash(pohunek service lock *)'
+  'Bash(pohunek plugin install *)'
+  'Bash(pohunek plugin link *)'
+  'Bash(pohunek plugin update *)'
+  'Bash(pohunek plugin uninstall *)'
+  'Bash(pohunek plugin enable *)'
+  'Bash(pohunek plugin disable *)'
+  'Bash(pohunek plugin select *)'
+)
+DENY_AFTER_HISTORY=(
+  'Bash(pohunek plugin profile migrate *--digest*)'
+  'Bash(pohunek plugin profile create *--arg*)'
+  'Bash(pohunek integration install *--all-profiles*)'
+  'Bash(pohunek integration install *--skill*)'
+  'Bash(pohunek integration uninstall *)'
+  'Bash(pohunek integration update *)'
+  'Bash(pohunek plugin profile rm *)'
+  'Bash(pohunek project rm *)'
+  'Bash(pohunek session rm *)'
+  'Bash(pohunek session stop *)'
+  'Bash(pohunek session retention sweep *--apply*)'
+  'Bash(pohunek session metadata *--clear*)'
+  'Bash(pohunek session metadata *--set*--set*)'
+  'Bash(pohunek session metadata */*)'
+  'Read(~/.claude/projects/**)'
+  'Read(~/.claude/.credentials.json)'
+  'Read(~/.claude/history.jsonl)'
+  'Read(~/.claude.json)'
+  'Read(~/.codex/sessions/**)'
+  'Read(~/.codex/history.jsonl)'
+  'Read(~/.codex/auth.json)'
+  'Read(~/.config/pohunek/agents/**)'
+)
+
+# Fills PROFILE_ARGS with the `--arg` pairs of the profile for base $1.
+build_profile_args() {
+  local base=$1 rule
+  local -a allow deny
+  PROFILE_ARGS=()
+  if [[ $base == codex ]]; then
+    # Codex has no per-profile allowlist: every pohunek command asks for
+    # approval to leave the network-less sandbox (guide, section Codex).
+    for rule in --ask-for-approval on-request --sandbox workspace-write -c sandbox_workspace_write.network_access=false; do
+      PROFILE_ARGS+=(--arg "$rule")
+    done
+    return
+  fi
+  allow=("${ALLOW_ALWAYS[@]}")
+  if [[ $HISTORY == yes ]]; then allow+=("$ALLOW_HISTORY"); fi
+  if granted projects; then allow+=('Bash(pohunek project add *)'); fi
+  if granted groups; then allow+=('Bash(pohunek session metadata * --set companion.group=*)'); fi
+  if granted profiles; then allow+=('Bash(pohunek plugin profile migrate * --yes)'); fi
+  if granted cli-update; then allow+=('Bash(claude update)' 'Bash(codex update)'); fi
+  deny=("${DENY_BEFORE_HISTORY[@]}")
+  if [[ $HISTORY != yes ]]; then deny+=("$DENY_NO_HISTORY"); fi
+  deny+=("${DENY_AFTER_HISTORY[@]}")
+  PROFILE_ARGS+=(--arg --allowedTools)
+  for rule in "${allow[@]}"; do PROFILE_ARGS+=(--arg "$rule"); done
+  PROFILE_ARGS+=(--arg --disallowedTools)
+  for rule in "${deny[@]}"; do PROFILE_ARGS+=(--arg "$rule"); done
+  # Last: it overrides a permissive default mode from the user's settings and
+  # ends the rule lists before the prompt the launch appends.
+  PROFILE_ARGS+=(--arg --permission-mode --arg default)
+}
+
+# The base runtime of the agent that runs automatic mode, from
+# `host inspect local --json`: claude or codex, available and supported. An
+# empty AGENT takes the first of codex and claude, the assistant's own order.
+resolve_auto_base() {
+  local inspect pick outcome="Nothing was changed."
+  if [[ ${1:-} == after_setup ]]; then
+    outcome="The changes pohunek setup made are kept and no session was started; start onboarding again from the card in guided mode."
+  fi
+  run_cli inspect host inspect local --json || die "Could not read the agent runtimes: $(cli_error "$inspect") $outcome"
+  pick=$(jq -r --arg agent "$AGENT" '
+    [.ok.runtimes[]? | select(.available == true and .supported != false)
+     | {agent, base: (.agent_base // .agent)} | select(.base == "claude" or .base == "codex")] as $ok
+    | if $agent != "" then ($ok | map(select(.agent == $agent)) | first)
+      else ($ok | map(select(.agent == .base)) | sort_by(if .agent == "codex" then 0 else 1 end) | first) end
+    | if . == null then "" else .agent + " " + .base end' <<<"$inspect")
+  if [[ -z $pick ]]; then
+    if [[ -n $AGENT ]]; then
+      die "Automatic mode runs under Claude or Codex, and $AGENT is not an available Claude or Codex agent here. Start in guided mode, or pick claude or codex. $outcome"
+    fi
+    die "Automatic mode runs under Claude or Codex, and neither is available here. Start in guided mode. $outcome"
+  fi
+  AUTO_AGENT=${pick% *}
+  AUTO_BASE=${pick#* }
+}
+
+# Reads whether pohunek-onboard exists and its file digest, for the preview;
+# the write after the yes replaces it only at this digest, so a profile that
+# changed in between stops the run.
+read_onboard_profile() {
+  local listed
+  run_cli listed plugin profile list --all --json || die "Could not read the agent profiles: $(cli_error "$listed")"
+  ONBOARD_DIGEST=$(jq -r --arg n "$ONBOARD_PROFILE" '[.ok.profiles[]? | select(.name == $n)] | first | .file_digest // empty' <<<"$listed")
+  if jq -e --arg n "$ONBOARD_PROFILE" '[.ok.profiles[]? | select(.name == $n)] | length > 0' >/dev/null <<<"$listed" && [[ -z $ONBOARD_DIGEST ]]; then
+    die "The existing $ONBOARD_PROFILE profile has no readable file digest, so it is not replaced. Check it with pohunek plugin profile list --all. Nothing was changed."
+  fi
+  ONBOARD_READ=1
+}
+
+# Writes the pohunek-onboard profile through the daemon.
+write_onboard_profile() {
+  local current created
+  # On a fresh machine there was no daemon before the yes.
+  if (( ! ONBOARD_READ )); then read_onboard_profile; fi
+  current=$ONBOARD_DIGEST
+  build_profile_args "$AUTO_BASE"
+  local -a replace=()
+  if [[ -n $current ]]; then replace=(--replace "$current"); fi
+  if ! run_cli created plugin profile create "$ONBOARD_PROFILE" --base "$AUTO_BASE" "${PROFILE_ARGS[@]}" "${replace[@]}" --json; then
+    if [[ $(jq -r '.err.code // empty' <<<"$created") == package_profile_digest_mismatch ]]; then
+      die "The $ONBOARD_PROFILE profile changed while this tool was writing it, so it was left as found and no session was started: $(cli_error "$created")"
+    fi
+    die "Could not write the $ONBOARD_PROFILE profile, so no session was started: $(cli_error "$created")"
+  fi
+  PROFILE_RECORD=$(jq -c --arg prev "$current" '{name: .ok.profile, base: .ok.base, file_digest: .ok.file_digest,
+    replaced: (if $prev == "" then null else $prev end)}' <<<"$created")
+  [[ $(jq -r '.file_digest | type' <<<"$PROFILE_RECORD") == string ]] || die "pohunek reported no digest for the $ONBOARD_PROFILE profile."
+}
+
+# ---------------------------------------------------------------- snapshot
+# Snapshot for the record: project ids, profile names with file digests, the
+# hook and skill state of every agent home, each local session's group and the
+# agent CLI versions. Metadata only. Prints nothing and fails when the daemon
+# cannot answer.
 take_snapshot() {
-  local projects profiles integrations
-  run_cli projects project list --json || die "Could not read the projects: $(cli_error "$projects")"
+  local projects profiles integrations sessions inspect
+  run_cli projects project list --json || return 1
   # `--all` also lists agent and hidden profiles; a core without it (0.42) has
   # no profile audiences, so its plain list is already complete.
   if ! run_cli profiles plugin profile list --all --json; then
-    [[ $(jq -r '.err.code // empty' <<<"$profiles") == cli_usage ]] ||
-      die "Could not read the agent profiles: $(cli_error "$profiles")"
-    run_cli profiles plugin profile list --json || die "Could not read the agent profiles: $(cli_error "$profiles")"
+    [[ $(jq -r '.err.code // empty' <<<"$profiles") == cli_usage ]] || return 1
+    run_cli profiles plugin profile list --json || return 1
   fi
-  run_cli integrations integration status --all-profiles --json ||
-    die "Could not read the hook state: $(cli_error "$integrations")"
-  jq -n --argjson p "$projects" --argjson pr "$profiles" --argjson i "$integrations" '{
+  run_cli integrations integration status --all-profiles --json || return 1
+  run_cli sessions session list --json || return 1
+  run_cli inspect host inspect local --json || return 1
+  jq -n --argjson p "$projects" --argjson pr "$profiles" --argjson i "$integrations" \
+    --argjson s "$sessions" --argjson h "$inspect" '{
     projects: [$p.ok[]? | .id],
     profiles: [$pr.ok.profiles[]? | {name, file_digest: (.file_digest // null)}],
-    integrations: $i.ok
+    integrations: $i.ok,
+    sessions: [$s.ok[]? | {id, group: (.metadata["companion.group"] // null)}],
+    agents: [$h.ok.runtimes[]? | select(.agent == (.agent_base // .agent)) | {agent, version: (.version // null)}]
   }'
+}
+
+require_snapshot() {
+  SNAPSHOT=$(take_snapshot) || die "Could not read pohunek's projects, profiles, hooks, sessions and agents for the onboarding record; nothing was launched."
+  SNAPSHOT=$(jq -c --arg when "$1" '. + {taken: $when}' <<<"$SNAPSHOT")
+}
+
+# The run's changes, from the same reads as the snapshot (tools/onboard-diff.jq).
+compute_diff() {
+  local record=$1 projects profiles integrations sessions inspect now
+  run_cli projects project list --json || return 1
+  if ! run_cli profiles plugin profile list --all --json; then
+    [[ $(jq -r '.err.code // empty' <<<"$profiles") == cli_usage ]] || return 1
+    run_cli profiles plugin profile list --json || return 1
+  fi
+  run_cli integrations integration status --all-profiles --json || return 1
+  run_cli sessions session list --json || return 1
+  run_cli inspect host inspect local --json || return 1
+  now=$(jq -n --argjson p "$projects" --argjson pr "$profiles" --argjson i "$integrations" \
+    --argjson s "$sessions" --argjson h "$inspect" \
+    '{projects: $p.ok, profiles: $pr.ok, integrations: $i.ok, sessions: $s.ok, inspect: $h.ok}')
+  jq -n --argjson snapshot "$(jq -c '.snapshot' <<<"$record")" --argjson now "$now" \
+    --arg own "$(jq -r '.session_id' <<<"$record")" -f "$DIFF_JQ" |
+    jq -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '. + {computed_at: $at}'
+}
+
+# Watches the onboard session of run $1 until it ends, then writes the run's
+# diff into the record, bound to that end. $2 is 1 when the launch reply showed
+# the session starting or running: an attach in this window returns only once
+# the user detaches or the session ends. Only a session seen live and then
+# listed as ended binds the diff; Undo trusts nothing else.
+watch_session_end() {
+  local run_id=$1 seen_live=$2 listed failures=0 missing=0 ended record diff
+  say "Waiting for the onboard session to end…"
+  echo "When it ends, this window records what the run changed, so Undo onboarding can remove"
+  echo "exactly that. Closing the window skips the record; Undo then removes only what it can prove."
+  while :; do
+    if run_cli listed session list --meta-eq "onboard.run=$run_id" --json; then
+      failures=0
+      if ! jq -e '[.ok[]?] | length > 0' >/dev/null <<<"$listed"; then
+        missing=$((missing + 1))
+        if (( missing >= WAIT_MAX_FAILURES )); then
+          echo "pohunek does not list the onboard session, so what the run changed is not recorded."
+          return 0
+        fi
+      elif jq -e '[.ok[]? | select(.state == "running" or .state == "starting")] | length > 0' >/dev/null <<<"$listed"; then
+        seen_live=1
+      elif (( seen_live )); then
+        break
+      else
+        echo "The onboard session ended before this window saw it running, so what the run changed is not recorded."
+        return 0
+      fi
+    else
+      failures=$((failures + 1))
+      if (( failures >= WAIT_MAX_FAILURES )); then
+        echo "pohunek did not answer, so what the run changed is not recorded: $(cli_error "$listed")"
+        return 0
+      fi
+    fi
+    sleep "$WAIT_POLL_SECONDS"
+  done
+  # The row's own end time, or the time this watch saw it gone.
+  ended=$(jq -r '[.ok[]? | .ended_at // empty] | first // empty' <<<"$listed")
+  if [[ -z $ended ]]; then ended=$(date -u +%Y-%m-%dT%H:%M:%SZ); fi
+  if ! record_path_ok || [[ ! -f $RECORD ]]; then
+    echo "The onboarding record is gone; nothing recorded."
+    return 0
+  fi
+  record=$(cat -- "$RECORD")
+  if ! jq -e --arg run "$run_id" '.run_id == $run and .diff == null' >/dev/null 2>&1 <<<"$record"; then
+    echo "The onboarding record now belongs to another run; nothing recorded."
+    return 0
+  fi
+  if ! diff=$(compute_diff "$record"); then
+    echo "pohunek did not answer, so what the run changed is not recorded."
+    return 0
+  fi
+  write_record "$(jq --argjson d "$diff" --arg ended "$ended" \
+    '. + {diff: ($d + {bound: "session_end", ended_at: $ended})}' <<<"$record")"
+  echo "The onboard session ended; what the run changed is recorded for Undo onboarding."
 }
 
 ensure_assistant_works() {
@@ -279,7 +628,7 @@ ensure_assistant_works() {
   if [[ $(jq -r '.err.code // empty' <<<"$out") == assistant_package_missing ]] && (( LAUNCH_ONLY && ! ASSUME_YES )); then
     echo "The assistant package is not installed, so the onboard session cannot start."
     if ask "Run the full setup now (it shows its changes and asks first)?"; then
-      local args=(--command "$COMMAND")
+      local args=(--command "$COMMAND" --mode "$MODE")
       if [[ -n $AGENT ]]; then args+=(--agent "$AGENT"); fi
       cleanup
       trap - EXIT
@@ -291,30 +640,45 @@ ensure_assistant_works() {
 
 # Writes the record, starts the onboard session and attaches to it.
 start_session() {
-  local setup_result=$1 assistant=$2 hooks_json=$3 snapshot run_id started_at doc launch sid app_id
-  snapshot=$(take_snapshot)
+  local setup_result=$1 assistant=$2 hooks_json=$3 skills_json=$4 run_id started_at doc launch sid app_id grant_json launched_live=0
+  [[ -n $SNAPSHOT ]] || require_snapshot before_launch
+  ensure_assistant_works
+  local profile=null
+  if [[ $MODE == automatic ]]; then
+    write_onboard_profile
+    profile=$PROFILE_RECORD
+    agent_args=(--agent "$ONBOARD_PROFILE")
+  fi
   run_id=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
   [[ $run_id =~ ^[0-9a-f]{32}$ ]] || die "Could not create a run id."
   started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  doc=$(jq -n --arg run "$run_id" --arg started "$started_at" --arg history "$HISTORY" --arg agent "$AGENT" \
-    --arg core "$CORE_VERSION" --argjson setup "$setup_result" --argjson assistant "$assistant" \
-    --argjson hooks "$hooks_json" --argjson snapshot "$snapshot" '{
-      schema: 1, run_id: $run, started_at: $started, mode: "guided", history: $history,
+  grant_json=null
+  if [[ $MODE == automatic ]]; then
+    grant_json=$(printf '%s\n' "${GRANT[@]}" | jq -R . | jq -sc 'map(select(. != ""))')
+  fi
+  doc=$(jq -n --arg run "$run_id" --arg started "$started_at" --arg mode "$MODE" --arg history "$HISTORY" \
+    --arg agent "${AUTO_AGENT:-$AGENT}" --arg core "$CORE_VERSION" --argjson setup "$setup_result" \
+    --argjson assistant "$assistant" --argjson hooks "$hooks_json" --argjson skills "$skills_json" \
+    --argjson snapshot "$SNAPSHOT" --argjson grant "$grant_json" --argjson profile "$profile" '{
+      schema: 1, run_id: $run, started_at: $started, mode: $mode, history: $history,
       agent: (if $agent == "" then null else $agent end), core_version: $core,
-      setup_result: $setup, assistant: $assistant, hooks_selected: $hooks, snapshot: $snapshot }')
+      setup_result: $setup, assistant: $assistant, hooks_selected: $hooks, skills: $skills,
+      grant: $grant, profile: $profile, snapshot: $snapshot }')
   write_record "$doc"
   echo "Onboarding record: $RECORD"
 
   say "Starting the onboard session…"
   local rc=0
-  launch=$(request_text "$HISTORY" | "$POHUNEK" assistant setup --request-stdin --json \
-    --meta "onboard.mode=guided" --meta "onboard.run=$run_id" --meta "onboard.history=$HISTORY" \
+  local -a meta=(--meta "onboard.mode=$MODE" --meta "onboard.run=$run_id" --meta "onboard.history=$HISTORY")
+  if [[ $MODE == automatic ]]; then meta+=(--meta "onboard.grant=$(IFS=,; printf '%s' "${GRANT[*]}")"); fi
+  launch=$(request_text "$HISTORY" "$MODE" | "$POHUNEK" assistant setup --request-stdin --json "${meta[@]}" \
     "${agent_args[@]}") || rc=$?
   if (( rc != 0 )) || ! jq -e '.ok.session.id | type == "string"' >/dev/null 2>&1 <<<"$launch"; then
     jq -e 'type == "object"' >/dev/null 2>&1 <<<"$launch" || launch=null
     die "The onboard session did not start: $(cli_error "$launch")"
   fi
   sid=$(jq -r '.ok.session.id' <<<"$launch")
+  if jq -e '.ok.session.state == "running" or .ok.session.state == "starting"' >/dev/null <<<"$launch"; then launched_live=1; fi
   [[ $sid =~ $ID_RE ]] || die "pohunek returned an unexpected session id."
   write_record "$(jq --arg sid "$sid" '. + {session_id: $sid}' <<<"$doc")"
   echo "Onboard session: $sid (Ctrl+] detaches; it keeps running)."
@@ -323,17 +687,297 @@ start_session() {
   app_id="org.omarchy.pohunek.$(printf '%s' "$sid" | sed -E 's/[^A-Za-z0-9]+/-/g' | cut -c1-80)"
   if command -v omarchy-launch-or-focus-tui >/dev/null 2>&1; then
     omarchy-launch-or-focus-tui "--app-id=$app_id" "$POHUNEK" attach "$sid"
-    exit 0
+  elif [[ $WAIT == yes ]]; then
+    "$POHUNEK" attach "$sid" || true
+  else
+    cleanup
+    trap - EXIT
+    exec "$POHUNEK" attach "$sid"
   fi
-  cleanup
-  trap - EXIT
-  exec "$POHUNEK" attach "$sid"
+  if [[ $WAIT == yes ]]; then watch_session_end "$run_id" "$launched_live"; fi
+  exit 0
 }
 
 agent_args=()
 if [[ -n $AGENT ]]; then agent_args=(--agent "$AGENT"); fi
 HISTORY=${HISTORY_ARG:-no}
+MODE=$MODE_ARG
+if [[ -n $WAIT_ARG ]]; then WAIT=$WAIT_ARG; elif (( ASSUME_YES )); then WAIT=no; else WAIT=yes; fi
+SNAPSHOT=""
+AUTO_AGENT=""
+AUTO_BASE=""
+PROFILE_RECORD=""
+ONBOARD_DIGEST=""
+ONBOARD_READ=0
 history_question="Let the onboard manager propose projects from your agents' CLI history too? pohunek reads only the working directory and modification time of each history file, never its content."
+
+# Asks the mode when it was not given (--yes without --mode is guided), checks
+# that this pohunek has what automatic mode follows, and asks the grant.
+choose_mode() {
+  if [[ -z $MODE ]]; then
+    if (( ASSUME_YES )); then
+      MODE=guided
+    else
+      say "Mode"
+      echo "  guided     the onboard agent proposes each change and waits for your yes"
+      echo "  automatic  it applies the items you grant without asking, under the $ONBOARD_PROFILE"
+      echo "             profile that allows exactly those commands; it reports everything else"
+      if ask "Use automatic mode?"; then MODE=automatic; else MODE=guided; fi
+    fi
+  fi
+  if [[ $MODE == automatic ]]; then
+    version_at_least "$CORE_VERSION" "$AUTO_VERSION" ||
+      die "Automatic mode needs pohunek $AUTO_VERSION or newer; this machine has $CORE_VERSION. Missing here:
+  - the onboarding guide in the assistant bundle, which the grant and the floor follow ($AUTO_VERSION)
+  - pohunek plugin profile rm, which Undo onboarding uses for the $ONBOARD_PROFILE profile ($PROFILE_RM_VERSION)
+Start in guided mode, or upgrade pohunek first. Nothing was changed."
+    if (( ! ASSUME_YES )); then ask_grant; fi
+  fi
+}
+
+# The previous run's record is replaced by this run's; say so when that run
+# was never undone.
+warn_previous_run() {
+  [[ -f $RECORD && ! -L $RECORD ]] || return 0
+  local started
+  started=$(jq -r "$JQ_CLEAN"' select(.schema == 1 and (.session_id | type == "string") and .undone_at == null)
+    | .started_at | clean' "$RECORD" 2>/dev/null) || return 0
+  [[ -n $started ]] || return 0
+  echo
+  echo "The onboarding run started $started was not undone. This run's record replaces it, so"
+  echo "Undo onboarding then covers only this run. To undo that run first, cancel here and run:"
+  echo "  $here/onboard --undo"
+}
+
+preview_session() {
+  local id
+  echo "  onboarding record  $RECORD (mode 0600): run id, your choices, project ids, profile"
+  echo "                     names with file digests, hook and skill state, session groups,"
+  echo "                     agent CLI versions"
+  if [[ $WAIT == yes ]]; then
+    echo "  then               this window stays open until the onboard session ends and records"
+    echo "                     what the run changed, for Undo onboarding; closing it skips that"
+  fi
+  if [[ $MODE != automatic ]]; then
+    echo "  onboard session    pohunek assistant setup, guided mode, agent ${AGENT:-chosen by pohunek}, history $HISTORY"
+    echo "                     It is instructed to read pohunek metadata only and to ask before each change;"
+    echo "                     in guided mode only your agent's own permission prompts enforce anything."
+    return
+  fi
+  echo "  profile            $ONBOARD_PROFILE, base ${AUTO_BASE:-the first available of codex and claude}, written through"
+  echo "                     pohunek plugin profile create (no [env], no home, your own agent login)"
+  if [[ -n $ONBOARD_DIGEST ]]; then
+    echo "                     replaces the existing $ONBOARD_PROFILE ($ONBOARD_DIGEST) at that digest"
+  fi
+  if [[ -n $AUTO_AGENT && $AUTO_AGENT != "$AUTO_BASE" ]]; then
+    echo "                     $AUTO_AGENT is a profile of $AUTO_BASE: the session runs plain $AUTO_BASE with its"
+    echo "                     default home and login, not $AUTO_AGENT's"
+  fi
+  case $AUTO_BASE in
+  claude)
+    echo "                     Claude allows the read-only pohunek commands of the onboarding guide and"
+    echo "                     the granted items without a prompt, denies the guide's floor, and asks for"
+    echo "                     the rest (permission mode default). Your own Claude allow rules still"
+    echo "                     apply on top: a command they allow runs without a prompt unless a deny"
+    echo "                     rule of this profile matches it (check them with /permissions)" ;;
+  codex)
+    echo "                     Codex has no per-profile allowlist: a pohunek command asks for your"
+    echo "                     approval, except one that your own Codex command rules (rules/ in your"
+    echo "                     Codex home) already allow; answer Yes, proceed only, never \"don't ask again\"" ;;
+  *)
+    echo "                     Claude: allowlist of the granted items plus your own allow rules;"
+    echo "                     Codex: pohunek commands ask, except those your own Codex rules allow" ;;
+  esac
+  echo "  onboard session    pohunek assistant setup --agent $ONBOARD_PROFILE, automatic mode, history $HISTORY"
+  if (( ${#GRANT[@]} == 0 )); then
+    echo "  without asking     nothing: every change is reported with its command, none is applied"
+  else
+    echo "  without asking     the onboard agent applies:"
+    for id in "${GRANT[@]}"; do echo "                       - $(grant_text "$id")"; done
+  fi
+  echo "  never              the floor of the onboarding guide, in every mode: reading transcripts,"
+  echo "                     history files, credentials or profile secrets; writing into a repository;"
+  echo "                     sudo; bypass flags; setup, service, package and hook removal commands;"
+  echo "                     removing projects, profiles or sessions"
+}
+
+# ------------------------------------------------------------------- undo
+# Whether session $1 still has the group $2 that onboarding set.
+group_still_set() {
+  local listed
+  run_cli listed session list --json || return 1
+  jq -e --arg id "$1" --arg g "$2" '[.ok[]? | select(.id == $id and .metadata["companion.group"] == $g)] | length == 1' >/dev/null <<<"$listed"
+}
+
+run_undo() {
+  local record run_id sid diff bound=false ended projects profiles sessions status listed plan input
+  local can_rm=false count i label key rc out
+  local -a argv failed=() done_list=() done_keys=() failed_profiles=()
+  resolve_cli "$COMMAND"
+  [[ -n $POHUNEK ]] || die "pohunek is not installed here, so there is nothing this tool can undo."
+  CORE_VERSION=$(core_version "$POHUNEK") || die "Cannot read the version of $POHUNEK."
+  require_version
+  record_path_ok || die "$RECORD cannot be read safely: its directory or the file is a symbolic link or not of the expected type. Nothing was changed."
+  [[ -f $RECORD ]] || die "There is no onboarding record ($RECORD), so there is nothing to undo."
+  record=$(cat -- "$RECORD")
+  jq -e '.schema == 1 and (.run_id | type == "string") and (.snapshot | type == "object")' >/dev/null 2>&1 <<<"$record" ||
+    die "$RECORD is not an onboarding record this tool can undo. Nothing was changed."
+  if jq -e '.undone_at != null' >/dev/null <<<"$record"; then
+    echo "The onboarding run started $(jq -r "$JQ_CLEAN"' .started_at | clean' <<<"$record") was undone at $(jq -r "$JQ_CLEAN"' .undone_at | clean' <<<"$record"); nothing is left to undo."
+    exit 0
+  fi
+  run_id=$(jq -r '.run_id' <<<"$record")
+  [[ $run_id =~ ^[0-9a-f]{32}$ ]] || die "The onboarding record has an unexpected run id. Nothing was changed."
+  sid=$(jq -r '.session_id // empty' <<<"$record")
+  run_cli listed session list --meta-eq "onboard.run=$run_id" --json || die "Could not read the sessions: $(cli_error "$listed")"
+  if jq -e '[.ok[]? | select(.state == "running" or .state == "starting")] | length > 0' >/dev/null <<<"$listed"; then
+    die "The onboard session ${sid:-of this run} is still running. Let it finish, or stop it with \`pohunek session stop ${sid:-<id>}\`, then run Undo onboarding again. Nothing was changed."
+  fi
+  # A diff the tool took when it watched the session end describes the run.
+  # Without one, the changes are read now and may include later ones; this
+  # late diff is never written to the record.
+  if jq -e '.diff.bound == "session_end"' >/dev/null <<<"$record"; then
+    bound=true
+    diff=$(jq -c '.diff' <<<"$record")
+    ended=$(jq -c '.diff.ended_at // null' <<<"$record")
+  else
+    diff=$(compute_diff "$record") || die "Could not read what changed since the onboarding run. Nothing was changed."
+    ended=$(jq -c '[.ok[]? | .ended_at // empty] | first // null' <<<"$listed")
+  fi
+  if version_at_least "$CORE_VERSION" "$PROFILE_RM_VERSION"; then can_rm=true; fi
+
+  run_cli projects project list --json || die "Could not read the projects: $(cli_error "$projects")"
+  if ! run_cli profiles plugin profile list --all --json; then
+    [[ $(jq -r '.err.code // empty' <<<"$profiles") == cli_usage ]] || die "Could not read the agent profiles: $(cli_error "$profiles")"
+    run_cli profiles plugin profile list --json || die "Could not read the agent profiles: $(cli_error "$profiles")"
+  fi
+  run_cli sessions session list --json || die "Could not read the sessions: $(cli_error "$sessions")"
+  run_cli status integration status --all-profiles --json || die "Could not read the hook state: $(cli_error "$status")"
+  input=$(jq -n --argjson r "$record" --argjson d "$diff" --argjson b "$bound" --argjson e "$ended" \
+    --argjson p "$projects" --argjson pr "$profiles" --argjson s "$sessions" --argjson st "$status" \
+    --argjson can "$can_rm" --arg v "$PROFILE_RM_VERSION" '
+    {record: $r, diff: $d, bound: $b, ended: $e, can_rm: $can, rm_version: $v, done: ($r.undo.done_keys // []),
+     now: {projects: $p.ok, profiles: $pr.ok, sessions: $s.ok, integrations: $st.ok}}')
+  plan=$(jq -n --argjson in "$input" -f "$UNDO_JQ") || die "Could not plan the undo. Nothing was changed."
+
+  say "Undo onboarding (run started $(jq -r "$JQ_CLEAN"' .started_at | clean' <<<"$record"))"
+  if [[ $bound != true ]]; then
+    echo "  What this run changed was not recorded when its session ended (its window was closed"
+    echo "  before that), so only what it provably added is removed: projects it registered"
+    echo "  before the session ended and the $ONBOARD_PROFILE profile this tool wrote. The rest is"
+    echo "  listed as kept, with what to run yourself."
+  fi
+  count=$(jq '.actions | length' <<<"$plan")
+  if (( count == 0 )); then
+    echo "  Nothing this run added is left to remove."
+  else
+    echo "This removes, in this order:"
+    jq -r "$JQ_CLEAN"' .actions[] | "  " + (.label | clean) + "\n      pohunek " + (.argv | map(clean) | join(" "))' <<<"$plan"
+  fi
+  jq -r "$JQ_CLEAN"' .done_before[] | "  done in an earlier Undo attempt: " + clean' <<<"$plan"
+  jq -r "$JQ_CLEAN"' .refused[] | "  refused: " + clean' <<<"$plan"
+  jq -r "$JQ_CLEAN"' .kept[] | "  kept: " + clean' <<<"$plan"
+  jq -r "$JQ_CLEAN"' .gone[] | "  already gone: " + clean' <<<"$plan"
+  if jq -e '.groups_known == false' >/dev/null <<<"$diff"; then
+    echo "  session groups: this record has no session list from before the run, so no group is cleared"
+  fi
+  jq -r "$JQ_CLEAN"' .agent_versions[] | "  not reverted: \(.agent | clean) was updated from \(.before // "?" | clean) to \(.after // "?" | clean); downgrade it yourself if you want the old version"' <<<"$diff"
+  if [[ $(jq -r '.snapshot.taken // empty' <<<"$record") == after_setup ]]; then
+    echo "  kept: hooks that pohunek setup installed before the record's snapshot ($(jq -r "$JQ_CLEAN"' .hooks_selected | map(clean) | join(", ") | if . == "" then "none" else . end' <<<"$record")); remove them with pohunek integration uninstall --agent <agent> [--profile <name>]"
+  fi
+  echo "  Projects are only unregistered: no repository and no worktree is deleted."
+  echo
+
+  mapfile -t done_keys < <(jq -r '.undo.done_keys // [] | .[]' <<<"$record")
+  if (( count > 0 )); then
+    if (( ! ASSUME_YES )); then
+      ask "Remove these?" || die "Cancelled; nothing was changed."
+    fi
+    for (( i = 0; i < count; i++ )); do
+      label=$(jq -r --argjson i "$i" "$JQ_CLEAN"' .actions[$i].label | clean' <<<"$plan")
+      key=$(jq -r --argjson i "$i" '.actions[$i].key' <<<"$plan")
+      local owner
+      owner=$(jq -r --argjson i "$i" '.actions[$i].profile // empty' <<<"$plan")
+      if [[ -n $owner ]] && printf '%s\n' "${failed_profiles[@]}" | grep -qxF -- "$owner"; then
+        failed+=("$label: skipped, an earlier step for this profile failed")
+        continue
+      fi
+      mapfile -t argv < <(jq -r --argjson i "$i" '.actions[$i].argv[]' <<<"$plan")
+      if [[ ${argv[0]} == session && ${argv[1]} == metadata ]] && ! group_still_set "${argv[2]}" "$(jq -r --argjson i "$i" '.actions[$i].group' <<<"$plan")"; then
+        echo "  kept: $label: it changed meanwhile"
+        done_list+=("$label: kept, changed meanwhile")
+        continue
+      fi
+      rc=0
+      run_cli out "${argv[@]}" || rc=$?
+      if (( rc == 0 )); then
+        echo "  removed: $label"
+        done_list+=("$label")
+        done_keys+=("$key")
+      elif [[ $(jq -r '.err.code // empty' <<<"$out") == package_profile_digest_mismatch ]]; then
+        echo "  kept: $label: it changed after onboarding"
+        done_list+=("$label: kept, changed after onboarding")
+      else
+        echo "  failed: $label: $(cli_error "$out")"
+        failed+=("$label: $(cli_error "$out")")
+        if [[ -n $owner ]]; then failed_profiles+=("$owner"); fi
+      fi
+    done
+  fi
+
+  local done_json keys_json failed_json at
+  done_json=$(printf '%s\n' "${done_list[@]}" | jq -R . | jq -sc 'map(select(. != ""))')
+  keys_json=$(printf '%s\n' "${done_keys[@]}" | jq -R . | jq -sc 'map(select(. != "")) | unique')
+  failed_json=$(printf '%s\n' "${failed[@]}" | jq -R . | jq -sc 'map(select(. != ""))')
+  at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  record=$(jq --arg at "$at" --argjson applied "$done_json" --argjson keys "$keys_json" --argjson failed "$failed_json" \
+    --argjson plan "$plan" --argjson bound "$bound" '
+    . + {undo: {at: $at, done: $applied, done_keys: $keys, failed: $failed, kept: $plan.kept, refused: $plan.refused,
+                diff: (if $bound then "recorded at session end" else "read at undo time" end)}}
+    + (if ($failed | length) == 0 then {undone_at: $at} else {} end)' <<<"$record")
+  write_record "$record"
+  if (( ${#failed[@]} > 0 )); then
+    die "Undo onboarding did not finish: ${#failed[@]} step(s) failed (listed above). Run it again after fixing them; the steps that worked are recorded and not repeated."
+  fi
+  echo "Undo onboarding finished."
+  offer_removals "$record"
+  exit 0
+}
+
+# What the run added outside the record's lists: the assistant package and the
+# pohunek service. Both default to no; --yes only prints the commands.
+offer_removals() {
+  local record=$1 source digest listed out
+  source=$(jq -r '.assistant.source // empty' <<<"$record")
+  digest=$(jq -r '.assistant.digest // empty' <<<"$record")
+  if [[ ($source == tool || $source == core) && $digest =~ ^sha256:[0-9a-f]{64}$ ]] &&
+    run_cli listed plugin list --json &&
+    jq -e --arg id "$VD_ASSISTANT_ID" --arg d "$digest" '[.ok.packages[]? | select(.package.id == $id and .digest == $d)] | length > 0' >/dev/null <<<"$listed"; then
+    echo
+    echo "Onboarding installed the assistant package $VD_ASSISTANT_ID ($digest)."
+    if (( ! ASSUME_YES )) && ask "Remove the assistant package too?"; then
+      if run_cli out plugin uninstall "$VD_ASSISTANT_ID" --digest "$digest" --yes --json; then
+        echo "  removed: $VD_ASSISTANT_ID"
+      else
+        echo "  not removed: $(cli_error "$out")"
+      fi
+    else
+      echo "  kept; remove it later with: pohunek plugin uninstall $VD_ASSISTANT_ID --digest $digest --yes"
+    fi
+  fi
+  echo
+  if (( ! ASSUME_YES )) && ask "Uninstall the pohunek service as well (pohunek service uninstall; it keeps your session metadata)?"; then
+    if run_cli out service uninstall --json; then
+      echo "  The pohunek service is uninstalled."
+    else
+      echo "  pohunek service uninstall refused: $(cli_error "$out")"
+    fi
+  else
+    echo "  The pohunek service stays; uninstall it later with: pohunek service uninstall"
+  fi
+}
+
+if (( UNDO )); then run_undo; fi
 
 # ---------------------------------------------------------------- launch only
 if (( LAUNCH_ONLY )); then
@@ -345,16 +989,17 @@ if (( LAUNCH_ONLY )); then
   if (( ! ASSUME_YES )); then
     if ask "$history_question"; then HISTORY=yes; else HISTORY=no; fi
   fi
+  choose_mode
+  if [[ $MODE == automatic ]]; then
+    resolve_auto_base
+    read_onboard_profile
+  fi
   say "What this will do"
-  echo "  onboarding record  $RECORD (mode 0600): run id, your choices, project ids,"
-  echo "                     profile names with file digests, hook and skill state"
-  echo "  onboard session    pohunek assistant setup, guided mode, agent ${AGENT:-chosen by pohunek}, history $HISTORY"
-  echo "                     It is instructed to read pohunek metadata only and to ask before each change;"
-  echo "                     in guided mode only your agent's own permission prompts enforce anything."
+  preview_session
+  warn_previous_run
   echo
   if (( ! ASSUME_YES )); then ask "Start the onboard session?" || die "Cancelled; nothing was changed."; fi
-  ensure_assistant_works
-  start_session null null "[]"
+  start_session null null "[]" "[]"
 fi
 
 # ------------------------------------------------------------------ full setup
@@ -427,8 +1072,36 @@ if [[ $assistant_status == gap ]]; then
 Nothing was changed."
 fi
 
-# Hooks: one question per agent home, default no.
+# The agent skill per home: offered where the daemon reports a skill state for
+# the home (integration status), or on a fresh machine, whose release
+# (pohunek $MIN_VERSION or newer) installs it.
+skill_homes=()
+skill_note=""
+if (( fresh )); then
+  for home in "${homes[@]}"; do skill_homes+=("$home"); done
+else
+  run_cli pre_status integration status --all-profiles --json || pre_status=null
+  while IFS= read -r home; do
+    [[ $home =~ $HOME_RE ]] && skill_homes+=("$home")
+  done < <(jq -r '.ok.agents[]? | select(.skill != null and .skill.state != "unsupported")
+    | .agent + (if (.home.selector.kind // "default") == "profile" then ":" + .home.selector.name else "" end)' <<<"$pre_status")
+  if ! jq -e '[.ok.agents[]? | select(.skill != null)] | length > 0' >/dev/null 2>&1 <<<"$pre_status"; then
+    skill_note="The agent skill is not offered: this pohunek daemon reports no skill state (pohunek $MIN_VERSION or newer installs it)."
+  fi
+fi
+skill_offered() {
+  local h
+  for h in "${skill_homes[@]}"; do [[ $h == "$1" ]] && return 0; done
+  return 1
+}
+skill_where() {
+  if [[ $1 == codex || $1 == codex:* ]]; then echo "$HOME/.agents/skills, shared by every Codex home"; else echo "the skills directory of $1"; fi
+}
+
+# Hooks: one question per agent home, default no; the agent skill only for a
+# home that gets hooks, because `integration install --skill` installs both.
 selected=()
+skills=()
 if (( ASSUME_YES )); then
   if [[ -n $HOOKS_ARG && $HOOKS_ARG != none ]]; then
     IFS=, read -r -a wanted <<<"$HOOKS_ARG"
@@ -439,14 +1112,38 @@ if (( ASSUME_YES )); then
       selected+=("$home")
     done
   fi
+  if [[ -n $SKILL_ARG && $SKILL_ARG != none ]]; then
+    IFS=, read -r -a wanted <<<"$SKILL_ARG"
+    for home in "${wanted[@]}"; do
+      skill_offered "$home" || die "--skill names $home, where this pohunek offers no agent skill. ${skill_note}Nothing was changed."
+      skills+=("$home")
+    done
+  fi
 else
   if (( ${#homes[@]} > 0 )); then
     say "Agent hooks (session resume, better \"needs you\" detection)"
     for home in "${homes[@]}"; do
-      if ask "Install pohunek's hooks into the agent home $home?"; then selected+=("$home"); fi
+      if ask "Install pohunek's hooks into the agent home $home?"; then
+        selected+=("$home")
+        if skill_offered "$home" && ask "  Also the pohunek agent skill, so $home can drive pohunek outside pohunek sessions ($(skill_where "$home"))?"; then
+          skills+=("$home")
+        fi
+      fi
     done
+    if [[ -n $skill_note ]]; then echo "$skill_note"; fi
   fi
   if ask "$history_question"; then HISTORY=yes; else HISTORY=no; fi
+fi
+choose_mode
+# A fresh machine has no daemon to ask until setup installed it, so only a bare
+# claude or codex (or none) can be checked before the yes.
+if [[ $MODE == automatic ]]; then
+  if (( ! fresh )); then
+    resolve_auto_base
+    read_onboard_profile
+  elif [[ -n $AGENT && $AGENT != claude && $AGENT != codex ]]; then
+    die "Automatic mode on a machine without pohunek runs under claude or codex; $AGENT cannot be checked before pohunek is installed. Pick claude or codex, or start in guided mode. Nothing was changed."
+  fi
 fi
 hooks_arg=none
 if (( ${#selected[@]} > 0 )); then hooks_arg=$(IFS=,; printf '%s' "${selected[*]}"); fi
@@ -476,6 +1173,9 @@ jq -r "$JQ_CLEAN"' .ok |
 if (( ${#selected[@]} == 0 )); then
   echo "  hooks        none (no agent home is changed)"
 fi
+for home in "${skills[@]}"; do
+  echo "  agent skill  $home: pohunek integration install --agent ${home%%:*}$([[ $home == *:* ]] && printf ' --profile %s' "${home#*:}") --skill ($(skill_where "$home"))"
+done
 if [[ $assistant_status == gap ]]; then
   echo
   echo "The assistant package is installed by this tool because pohunek setup cannot:"
@@ -489,16 +1189,24 @@ if [[ $assistant_status == gap ]]; then
 fi
 echo
 echo "Then:"
-echo "  onboarding record  $RECORD (mode 0600)"
-echo "  onboard session    pohunek assistant setup, guided mode, agent ${AGENT:-chosen by pohunek}, history $HISTORY"
-echo "                     It is instructed to read pohunek metadata only and to ask before each change;"
-echo "                     in guided mode only your agent's own permission prompts enforce anything."
+preview_session
+warn_previous_run
 echo
 if (( ! ASSUME_YES )); then
   ask "Apply this and start the onboard session?" || die "Cancelled; nothing was changed."
 fi
 
 # ------------------------------------------------------------------- apply
+# The record's snapshot is read before setup changes anything, so the hooks
+# setup installs count as this run's. Without a daemon yet (a fresh machine, or
+# one setup still has to start) it is read right after setup.
+if (( ! fresh )); then
+  if SNAPSHOT=$(take_snapshot); then
+    SNAPSHOT=$(jq -c '. + {taken: "before_setup"}' <<<"$SNAPSHOT")
+  else
+    SNAPSHOT=""
+  fi
+fi
 say "Running pohunek setup (this can take a few minutes)…"
 setup_rc=0
 run_cli setup_out setup --yes --json --hooks "$hooks_arg" || setup_rc=$?
@@ -520,6 +1228,25 @@ if (( fresh )); then
   [[ -f $POHUNEK && -x $POHUNEK ]] || die "pohunek setup finished but $POHUNEK is missing."
   export PATH="$prefix/bin:$PATH"
 fi
+if [[ -z $SNAPSHOT ]]; then require_snapshot after_setup; fi
+
+# The agent skill per ticked home; a refusal (an edited or foreign skill) is
+# reported and recorded, the hooks of that home are installed anyway.
+skill_results=()
+for home in "${skills[@]}"; do
+  args=(integration install --agent "${home%%:*}")
+  if [[ $home == *:* ]]; then args+=(--profile "${home#*:}"); fi
+  rc=0
+  run_cli out "${args[@]}" --skill --json || rc=$?
+  if (( rc == 0 )); then
+    echo "Agent skill in $home: $(jq -r "$JQ_CLEAN"' [.ok.installed[]?.skill.state // "installed"] | first // "installed" | clean' <<<"$out")"
+    skill_results+=("$(jq -nc --arg h "$home" --argjson o "$out" '{home: $h, state: ([$o.ok.installed[]?.skill.state] | first // null)}')")
+  else
+    echo "Agent skill in $home was not installed: $(cli_error "$out")"
+    skill_results+=("$(jq -nc --arg h "$home" --argjson o "$out" '{home: $h, error: ($o.err.code // "failed")}')")
+  fi
+done
+skills_json=$(printf '%s\n' "${skill_results[@]}" | jq -sc 'map(select(. != null))')
 
 if [[ $assistant_record == null && $assistant_status == gap ]]; then
   # The daemon answers now; on a fresh machine this is the first look.
@@ -548,5 +1275,5 @@ if [[ $assistant_record == null && $assistant_status == gap ]]; then
   fi
 fi
 
-ensure_assistant_works
-start_session "$setup_out" "$assistant_record" "$hooks_json"
+if [[ $MODE == automatic ]] && (( fresh )); then resolve_auto_base after_setup; fi
+start_session "$setup_out" "$assistant_record" "$hooks_json" "$skills_json"

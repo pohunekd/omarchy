@@ -31,13 +31,45 @@ TOOLS = ["bash", "env", "python3", "jq", "curl", "mktemp", "od", "tr", "sed", "g
          "head", "tar", "gzip", "sha256sum", "cp", "rm", "mkdir", "mv", "chmod", "cat", "date", "sync",
          "uname", "dirname", "sleep"]
 HOMES = ["claude", "claude:work", "codex"]
+ONBOARD_PROFILE = "pohunek-onboard"
+# The Claude rules of the pohunek-onboard profile, copied from the table
+# "Allowlist and floor" of docs/knowledge/guides/onboarding.md (pohunek 0.43.0).
+CLAUDE_ALLOW = [
+    "Bash(pohunek --version)", "Bash(pohunek health --json)", "Bash(pohunek doctor --json)",
+    "Bash(pohunek service status --json)", "Bash(pohunek host inspect local --json)", "Bash(pohunek plugin list --json)",
+    "Bash(pohunek plugin doctor --json)", "Bash(pohunek plugin profile list --all --json)",
+    "Bash(pohunek integration status --all-profiles --json)", "Bash(pohunek integration doctor --all-profiles --json)",
+    "Bash(pohunek project list --json)", "Bash(pohunek session list --json)", "Bash(pohunek project candidates --json)",
+    'Bash(pohunek session metadata "$POHUNEK_SESSION_ID" --set onboard.state=done)']
+HISTORY_ALLOW = "Bash(pohunek project candidates --sources pohunek --sources history --json)"
+_DENY_HEAD = [
+    "Bash(sudo *)", "Bash(pohunek *--host*)", "Bash(pohunek setup *)", "Bash(pohunek service install *)",
+    "Bash(pohunek service upgrade *)", "Bash(pohunek service uninstall *)", "Bash(pohunek service refresh-path *)",
+    "Bash(pohunek service lock *)", "Bash(pohunek plugin install *)", "Bash(pohunek plugin link *)",
+    "Bash(pohunek plugin update *)", "Bash(pohunek plugin uninstall *)", "Bash(pohunek plugin enable *)",
+    "Bash(pohunek plugin disable *)", "Bash(pohunek plugin select *)"]
+_DENY_TAIL = [
+    "Bash(pohunek plugin profile migrate *--digest*)", "Bash(pohunek plugin profile create *--arg*)",
+    "Bash(pohunek integration install *--all-profiles*)", "Bash(pohunek integration install *--skill*)",
+    "Bash(pohunek integration uninstall *)", "Bash(pohunek integration update *)", "Bash(pohunek plugin profile rm *)",
+    "Bash(pohunek project rm *)", "Bash(pohunek session rm *)", "Bash(pohunek session stop *)",
+    "Bash(pohunek session retention sweep *--apply*)", "Bash(pohunek session metadata *--clear*)",
+    "Bash(pohunek session metadata *--set*--set*)", "Bash(pohunek session metadata */*)",
+    "Read(~/.claude/projects/**)", "Read(~/.claude/.credentials.json)", "Read(~/.claude/history.jsonl)",
+    "Read(~/.claude.json)", "Read(~/.codex/sessions/**)", "Read(~/.codex/history.jsonl)", "Read(~/.codex/auth.json)",
+    "Read(~/.config/pohunek/agents/**)"]
+CLAUDE_DENY = _DENY_HEAD + _DENY_TAIL
+CLAUDE_DENY_NO_HISTORY = _DENY_HEAD + ["Bash(pohunek project candidates *history*)"] + _DENY_TAIL
 
 
 def is_read_only(argv):
     """Commands that change nothing; everything else is a write."""
     return (argv[:1] == ["--version"]
             or (argv[:1] == ["setup"] and "--dry-run" in argv)
-            or argv[:2] in (["service", "check"], ["plugin", "list"]))
+            or (argv[:3] == ["plugin", "profile", "create"] and "--dry-run" in argv)
+            or argv[:2] in (["service", "check"], ["plugin", "list"], ["project", "list"], ["session", "list"],
+                            ["integration", "status"], ["host", "inspect"])
+            or argv[:3] == ["plugin", "profile", "list"])
 
 
 class Scenario(unittest.TestCase):
@@ -67,30 +99,32 @@ class Scenario(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data if isinstance(data, bytes) else data.encode())
 
-    def publish_assistant(self, sums_digest=None, notes_digest=None, notes=True):
-        base = f"github.com/pohunekd/plugin-assistant/releases/download/v{VERSION}"
-        self.put(f"{base}/{ASSISTANT}", self.archive)
-        self.put(f"{base}/SHA256SUMS", f"{sums_digest or self.digest}  {ASSISTANT}\n")
+    def publish_assistant(self, sums_digest=None, notes_digest=None, notes=True, version=VERSION):
+        base = f"github.com/pohunekd/plugin-assistant/releases/download/v{version}"
+        archive = f"pohunek.context.assistant-{version}.tar.zst"
+        self.put(f"{base}/{archive}", self.archive)
+        self.put(f"{base}/SHA256SUMS", f"{sums_digest or self.digest}  {archive}\n")
         body = "## Changes\r\n\r\nSomething.\r\n"
         if notes:
-            body += f"\r\nAssistant package pohunek.context.assistant {VERSION} sha256: {notes_digest or self.digest}\r\n"
-        self.put(f"api.github.com/repos/zajca/pohunek/releases/tags/v{VERSION}", json.dumps({"tag_name": f"v{VERSION}", "body": body}))
+            body += f"\r\nAssistant package pohunek.context.assistant {version} sha256: {notes_digest or self.digest}\r\n"
+        self.put(f"api.github.com/repos/zajca/pohunek/releases/tags/v{version}", json.dumps({"tag_name": f"v{version}", "body": body}))
 
-    def publish_core(self, corrupt=False):
+    def publish_core(self, corrupt=False, version=VERSION):
         """A core release archive whose `pohunek` is tools/demo-pohunek."""
+        core = f"pohunek-daemon-{version}-x86_64-unknown-linux-gnu"
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            for name, data, mode in ((f"{CORE}/pohunek", DEMO.read_bytes(), 0o755),
-                                     (f"{CORE}/packaging/install-daemon.sh", b"#!/bin/sh\nexit 0\n", 0o755)):
+            for name, data, mode in ((f"{core}/pohunek", DEMO.read_bytes(), 0o755),
+                                     (f"{core}/packaging/install-daemon.sh", b"#!/bin/sh\nexit 0\n", 0o755)):
                 info = tarfile.TarInfo(name)
                 info.size, info.mode = len(data), mode
                 tar.addfile(info, io.BytesIO(data))
         data = buf.getvalue()
         digest = hashlib.sha256(b"other" if corrupt else data).hexdigest()
-        base = f"github.com/zajca/pohunek/releases/download/v{VERSION}"
-        self.put(f"{base}/{CORE}.tar.gz", data)
-        self.put(f"{base}/{CORE}.tar.gz.sha256", f"{digest}  {CORE}.tar.gz\n")
-        self.put("api.github.com/repos/zajca/pohunek/releases/latest", json.dumps({"tag_name": f"v{VERSION}"}))
+        base = f"github.com/zajca/pohunek/releases/download/v{version}"
+        self.put(f"{base}/{core}.tar.gz", data)
+        self.put(f"{base}/{core}.tar.gz.sha256", f"{digest}  {core}.tar.gz\n")
+        self.put("api.github.com/repos/zajca/pohunek/releases/latest", json.dumps({"tag_name": f"v{version}"}))
 
     # ------------------------------------------------------------------ running
     def env(self, extra=None):
@@ -198,7 +232,8 @@ exit 3
     # ---------------------------------------------------------------- scenarios
     def test_declining_at_the_one_yes_writes_nothing(self):
         before = self.home_tree()
-        code, out = self.run_tty(self.demo(), ["y", "n", "y", "y", "n"])
+        # claude y (skill n), claude:work n, codex y (skill n), history y, mode guided, apply n
+        code, out = self.run_tty(self.demo(), ["y", "n", "n", "y", "n", "y", "n", "n"])
         self.assertEqual(code, 1, out)
         self.assertIn("installed by this tool because pohunek setup cannot", out)
         self.assertIn("Cancelled; nothing was changed.", out)
@@ -215,9 +250,9 @@ exit 3
         self.assertEqual(setup[0][setup[0].index("--hooks") + 1], "none")
         order = [a[:2] for a in self.writes()]
         self.assertEqual(order, [["setup", "--yes"], ["plugin", "install"], ["assistant", "help"],
-                                 ["project", "list"], ["plugin", "profile"], ["plugin", "profile"],
-                                 ["integration", "status"],
                                  ["assistant", "setup"], ["attach", order[-1][1]]], order)
+        first_apply = next(i for i, a in enumerate(self.argvs()) if a[:2] == ["setup", "--yes"])
+        self.assertIn(["project", "list", "--json"], self.argvs()[:first_apply], "the snapshot is read before setup")
         install = self.find(["plugin", "install"])[0]
         self.assertEqual(install[install.index("--sha256") + 1], self.digest)
         profile_lists = self.find(["plugin", "profile", "list"])
@@ -233,7 +268,10 @@ exit 3
         self.assertEqual(rec["hooks_selected"], [])
         self.assertEqual(rec["setup_result"]["err"]["code"], "setup_incomplete")
         self.assertEqual(rec["assistant"], {"source": "tool", "version": VERSION, "digest": "sha256:" + self.digest})
-        self.assertEqual(sorted(rec["snapshot"]), ["integrations", "profiles", "projects"])
+        self.assertEqual(sorted(rec["snapshot"]), ["agents", "integrations", "profiles", "projects", "sessions", "taken"])
+        self.assertEqual(rec["snapshot"]["taken"], "before_setup")
+        self.assertEqual((rec["grant"], rec["profile"], rec["skills"]), (None, None, []))
+        self.assertEqual(self.find(["plugin", "profile", "create"]), [], "guided mode writes no profile")
         self.assertEqual(rec["snapshot"]["profiles"], [{"name": "work", "file_digest": "sha256:" + "ef" * 32}])
         self.assertIn(f"onboard.run={rec['run_id']}", launch)
         self.assertIn("onboard.mode=guided", launch)
@@ -246,7 +284,7 @@ exit 3
         self.assertIn("never pass --host and never a <host>/<session-id> target", request)
 
     def test_only_ticked_homes_get_hooks(self):
-        code, out = self.run_tty(self.demo(), ["y", "n", "y", "y", "y"])
+        code, out = self.run_tty(["--no-wait", *self.demo()], ["y", "n", "n", "y", "n", "y", "n", "y"])
         self.assertEqual(code, 0, out)
         setup = self.find(["setup", "--yes"])[0]
         self.assertEqual(setup[setup.index("--hooks") + 1], "claude,codex")
@@ -410,7 +448,7 @@ exit 3
     def test_launch_only_skips_setup_and_asks_for_history(self):
         shutil.rmtree(self.fixtures)
         self.fixtures.mkdir()
-        code, out = self.run_tty(["--launch-only", "--agent", "claude", *self.demo()], ["y", "y"],
+        code, out = self.run_tty(["--launch-only", "--no-wait", "--agent", "claude", *self.demo()], ["y", "n", "y"],
                                  {"DEMO_POHUNEK_ASSISTANT": "present"})
         self.assertEqual(code, 0, out)
         self.assertEqual(self.find(["setup"]), [])
@@ -421,7 +459,7 @@ exit 3
         self.assertEqual(launch[launch.index("--agent") + 1], "claude")
 
     def test_launch_only_declined_writes_nothing(self):
-        code, out = self.run_tty(["--launch-only", *self.demo()], ["n", "n"], {"DEMO_POHUNEK_ASSISTANT": "present"})
+        code, out = self.run_tty(["--launch-only", *self.demo()], ["n", "n", "n"], {"DEMO_POHUNEK_ASSISTANT": "present"})
         self.assertEqual(code, 1, out)
         self.assertEqual(self.writes(), [])
         self.assert_no_record()
@@ -456,6 +494,608 @@ exit 3
         self.assertEqual(code, 1, out)
         self.assertIn("Checksum mismatch", out)
         self.assertNotIn("What the installer will do", out)
+
+    # ------------------------------------------------- automatic mode and undo
+    def pohunek(self, *argv, extra=None):
+        """Calls the fake as the onboard agent or the user would, outside the tool's log."""
+        env = self.env(extra)
+        env.pop("DEMO_POHUNEK_LOG")
+        r = subprocess.run([str(DEMO), *argv], env=env, capture_output=True, text=True, timeout=60)
+        doc = json.loads(r.stdout) if r.stdout.strip().startswith("{") else None
+        return r.returncode, doc
+
+    def lists(self, extra=None):
+        """What Undo must restore: projects, profiles, groups, hooks and skills per home."""
+        _, projects = self.pohunek("project", "list", "--json", extra=extra)
+        _, profiles = self.pohunek("plugin", "profile", "list", "--all", "--json", extra=extra)
+        _, sessions = self.pohunek("session", "list", "--json", extra=extra)
+        _, status = self.pohunek("integration", "status", "--all-profiles", "--json", extra=extra)
+        return {
+            "projects": sorted(p["id"] for p in projects["ok"]),
+            "profiles": sorted((p["name"], p["file_digest"]) for p in profiles["ok"]["profiles"]),
+            "groups": {r["id"]: r["metadata"].get("companion.group") for r in sessions["ok"]
+                       if not r["metadata"].get("onboard.mode")},
+            "homes": sorted((a["agent"], json.dumps(a["home"], sort_keys=True), a["state"], a["skill"]["state"])
+                            for a in status["ok"]["agents"]),
+        }
+
+    def end_onboard_session(self):
+        """The onboard session ends: `state` stopped and `ended_at` set, as the
+        daemon does (crates/daemon/src/session/mod.rs:1893). Written atomically,
+        because a waiting tools/onboard reads the file meanwhile."""
+        path = self.state / "sessions.json"
+        rows = json.loads(path.read_text())
+        t = time.time()
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + f".{int((t % 1) * 1e9):09d}Z"
+        for row in rows:
+            row["state"], row["activity"], row["ended_at"] = "stopped", None, stamp
+        tmp = path.with_suffix(".test.tmp")
+        tmp.write_text(json.dumps(rows))
+        os.replace(tmp, path)
+
+    def run_waiting(self, args, extra=None, during=lambda: None):
+        """Runs the tool with --wait; once it watches the session, runs `during`
+        (the onboard agent at work), then ends the session and collects the tool."""
+        proc = subprocess.Popen([str(ONBOARD), *args, "--wait"], env=self.env(extra), stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        deadline = time.monotonic() + 60
+        while not any(a[:2] == ["session", "list"] and "--meta-eq" in a for a in self.argvs()):
+            if proc.poll() is not None or time.monotonic() > deadline:
+                proc.kill()
+                out, err = proc.communicate()
+                self.fail(f"the tool did not start watching the session: {out}{err}")
+            time.sleep(0.1)
+        during()
+        self.end_onboard_session()
+        out, err = proc.communicate(timeout=60)
+        return proc.returncode, out, err
+
+    def auto_env(self, **more):
+        return {"DEMO_POHUNEK_VERSION": "0.43.0", "DEMO_POHUNEK_ASSISTANT": "present", **more}
+
+    def profile_create_args(self):
+        create = self.find(["plugin", "profile", "create"])
+        self.assertEqual(len(create), 1, create)
+        argv = create[0]
+        self.assertEqual(argv[3:6], [ONBOARD_PROFILE, "--base", argv[5]])
+        values = [argv[i + 1] for i, a in enumerate(argv) if a == "--arg"]
+        self.assertEqual(sum(1 for a in argv if a == "--arg") * 2 + 6 + (2 if "--replace" in argv else 0) + 1, len(argv),
+                         f"only --arg pairs, --replace and --json follow the base: {argv}")
+        for flag in ("--home", "--secret-env", "--dry-run"):
+            self.assertNotIn(flag, argv)
+        return argv, values
+
+    def test_run_then_undo_restores_the_exact_pre_run_lists(self):
+        auto = self.auto_env()
+        before = self.lists(auto)
+
+        def agent_at_work():
+            # A project, a group, a profile with hooks, a CLI update.
+            self.pohunek("project", "add", "/home/dev/code/new-repo", "--name", "new-repo", "--json", extra=auto)
+            self.pohunek("session", "metadata", "s-01JDEMO00000000000000000A1", "--set", "companion.group=Reviews", "--json", extra=auto)
+            code, made = self.pohunek("plugin", "profile", "create", "side", "--base", "claude", "--home", "/home/dev/.claude-side",
+                                      "--json", extra=auto)
+            self.assertEqual(code, 0, made)
+            self.pohunek("integration", "install", "--agent", "claude", "--profile", "side", "--json", extra=auto)
+            (self.state / "cli-versions.json").write_text(json.dumps({"claude": "2.2.0"}))
+            r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+            self.assertEqual(r.returncode, 1, "the onboard session still runs")
+            self.assertIn("is still running", r.stderr)
+            self.assertEqual([a for a in self.writes() if a[:2] == ["project", "rm"] or a[:3] == ["plugin", "profile", "rm"]], [])
+
+        code, out, err = self.run_waiting(["--yes", "--mode", "automatic", "--grant", "projects,groups,profiles,profile-hooks",
+                                           "--hooks", "claude,codex", "--skill", "claude", *self.demo()], auto, agent_at_work)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("what the run changed is recorded", out)
+        rec = self.read_record()
+        self.assertEqual(rec["diff"]["bound"], "session_end")
+        self.assertEqual((rec["mode"], rec["grant"]), ("automatic", ["projects", "groups", "profiles", "profile-hooks"]))
+        self.assertEqual(rec["profile"]["name"], ONBOARD_PROFILE)
+        self.assertEqual(rec["profile"]["replaced"], None)
+        self.assertEqual(rec["skills"], [{"home": "claude", "state": "created"}])
+        launch = self.find(["assistant", "setup"])[0]
+        self.assertIn("onboard.grant=projects,groups,profiles,profile-hooks", launch)
+        self.assertEqual(launch[launch.index("--agent") + 1], ONBOARD_PROFILE)
+        self.assertIn("automatic mode", (self.state / "request.txt").read_text())
+
+        # The user's own changes after the session ended are not the run's.
+        self.pohunek("project", "add", "/home/dev/code/later", "--name", "later", "--json", extra=auto)
+        self.pohunek("plugin", "profile", "create", "mine", "--base", "claude", "--home", "/home/dev/.claude-mine", "--json", extra=auto)
+        later = self.lists(auto)
+
+        self.log.unlink()
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        after = self.lists(auto)
+        self.assertEqual(after["groups"], before["groups"])
+        self.assertEqual([h for h in after["homes"] if '"mine"' not in h[1]], before["homes"],
+                         "hooks and skills are back; only the home of the user's own later profile is new")
+        self.assertEqual(after["projects"], sorted(before["projects"] + ["p-" + hashlib.sha256(b"/home/dev/code/later").hexdigest()[:8]]),
+                         "the run's project is gone; the one added after the session ended stays")
+        self.assertEqual(after["profiles"], sorted(before["profiles"] + [p for p in later["profiles"] if p[0] == "mine"]),
+                         "the run's profiles are gone; the one created after the session ended stays")
+        writes = [a for a in self.writes() if a[:1] != ["--version"]]
+        self.assertEqual([a[:3] for a in writes], [
+            ["project", "rm", "p-" + hashlib.sha256(b"/home/dev/code/new-repo").hexdigest()[:8]],
+            ["plugin", "profile", "rm"],                                           # pohunek-onboard
+            ["integration", "uninstall", "--agent"], ["plugin", "profile", "rm"],  # side: its hooks, then the profile
+            ["session", "metadata", "s-01JDEMO00000000000000000A1"],
+            ["integration", "uninstall", "--agent"], ["integration", "uninstall", "--agent"]], writes)
+        self.assertEqual(writes[1][3], ONBOARD_PROFILE)
+        self.assertEqual(writes[2], ["integration", "uninstall", "--agent", "claude", "--profile", "side", "--json"])
+        self.assertEqual(writes[4][3:], ["--clear", "companion.group", "--json"])
+        self.assertEqual(writes[5:], [["integration", "uninstall", "--agent", "claude", "--json"],
+                                      ["integration", "uninstall", "--agent", "codex", "--json"]],
+                         "hooks setup installed and the skill of claude, after the profiles")
+        self.assertIn("hooks and agent skill in claude", r.stdout, "the skill the removal takes is named")
+        self.assertIn("not reverted: claude was updated from 2.1.3 to 2.2.0", r.stdout)
+        self.assertNotIn(["plugin", "uninstall"], [a[:2] for a in writes], "--yes never removes the assistant package")
+        self.assertNotIn(["service", "uninstall"], [a[:2] for a in writes], "--yes never uninstalls the service")
+        self.assertIn("pohunek service uninstall", r.stdout)
+        rec = self.read_record()
+        self.assertTrue(rec["undone_at"])
+        self.assertEqual(rec["undo"]["failed"], [])
+        self.assertEqual(rec["diff"]["agent_versions"], [{"agent": "claude", "before": "2.1.3", "after": "2.2.0"}])
+        self.assertNotIn("later", json.dumps(rec["diff"]))
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("nothing is left to undo", r.stdout)
+
+    def test_an_edited_profile_is_kept_and_named(self):
+        auto = self.auto_env()
+        made = {}
+
+        def agent_at_work():
+            made.update(self.pohunek("plugin", "profile", "create", "side", "--base", "claude", "--home", "/home/dev/.claude-side",
+                                     "--json", extra=auto)[1])
+
+        code, out, err = self.run_waiting(["--yes", "--mode", "automatic", "--grant", "profiles", *self.demo()], auto, agent_at_work)
+        self.assertEqual(code, 0, out + err)
+        diff = self.read_record()["diff"]
+        self.assertEqual([p["name"] for p in diff["profiles_created"]], [ONBOARD_PROFILE, "side"])
+        _, edited = self.pohunek("plugin", "profile", "create", "side", "--base", "claude", "--home", "/home/dev/.claude-side",
+                                 "--secret-env", "EXTRA_TOKEN", "--replace", made["ok"]["file_digest"], "--json", extra=auto)
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"kept: profile side: edited after onboarding (now {edited['ok']['file_digest']})", r.stdout)
+        removed = [a[3] for a in self.find(["plugin", "profile", "rm"])]
+        self.assertEqual(removed, [ONBOARD_PROFILE], "only the unchanged profile is removed")
+        names = [p["name"] for p in self.pohunek("plugin", "profile", "list", "--all", "--json", extra=auto)[1]["ok"]["profiles"]]
+        self.assertIn("side", names)
+        self.assertTrue(self.read_record()["undone_at"])
+
+    def test_undo_asks_once_and_the_assistant_and_service_default_to_no(self):
+        r = self.run_tool(["--yes", "--mode", "guided", *self.demo()])  # gap: the tool installs the assistant
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.pohunek("project", "add", "/home/dev/code/new-repo", "--name", "new-repo", "--json")
+        self.end_onboard_session()
+        r = self.run_tool(["--undo", *self.demo()])
+        self.assertEqual(r.returncode, 2, "no terminal and no --yes")
+        self.assertIn("No terminal", r.stderr)
+        code, out = self.run_tty(["--undo", *self.demo()], ["n"])
+        self.assertEqual(code, 1, out)
+        self.assertIn("Cancelled; nothing was changed.", out)
+        self.assertEqual(self.find(["project", "rm"]), [])
+        # Yes to the list; Enter (no) to the assistant package; yes to the service, which refuses.
+        code, out = self.run_tty(["--undo", *self.demo()], ["y", "", "y"])
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.find(["project", "rm"])), 1)
+        self.assertEqual(self.find(["plugin", "uninstall"]), [], "the assistant package stays by default")
+        self.assertIn("pohunek plugin uninstall pohunek.context.assistant --digest sha256:" + self.digest, out)
+        self.assertEqual(len(self.find(["service", "uninstall"])), 1)
+        self.assertIn("uninstall refused: live sessions remain", out, "the core's own refusal is shown")
+        self.assertNotIn("--stop-sessions", self.find(["service", "uninstall"])[0])
+
+    def test_a_stale_profile_digest_stops_the_run(self):
+        auto = self.auto_env()
+        self.pohunek("plugin", "profile", "create", ONBOARD_PROFILE, "--base", "claude", "--json", extra=auto)
+        r = self.run_tool(["--yes", "--mode", "automatic", "--grant", "none", *self.demo()],
+                          {**auto, "DEMO_POHUNEK_PROFILE_CHANGED": ONBOARD_PROFILE})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("changed while this tool was writing it", r.stderr)
+        listed = self.pohunek("plugin", "profile", "list", "--all", "--json", extra=auto)[1]["ok"]["profiles"]
+        digest = next(p["file_digest"] for p in listed if p["name"] == ONBOARD_PROFILE)
+        self.assertIn(f"replaces the existing {ONBOARD_PROFILE} ({digest}) at that digest", r.stdout, "the preview says so")
+        self.assertIn("is not the file version the request named", r.stderr, "the core's own message is shown")
+        create = self.find(["plugin", "profile", "create"])[0]
+        self.assertEqual(create[create.index("--replace") + 1], digest, "replaced only at the digest the preview showed")
+        first_list = next(i for i, a in enumerate(self.argvs()) if a[:3] == ["plugin", "profile", "list"])
+        first_apply = next(i for i, a in enumerate(self.argvs()) if a[:2] == ["setup", "--yes"])
+        self.assertLess(first_list, first_apply, "the digest is read before the yes")
+        self.assertEqual(self.find(["assistant", "setup"]), [], "no session starts")
+        self.assert_no_record()
+
+    def test_guided_mode_writes_no_profile(self):
+        for args in (["--yes", "--mode", "guided"], ["--launch-only", "--yes"]):
+            with self.subTest(args=args):
+                self.log.unlink(missing_ok=True)
+                r = self.run_tool([*args, *self.demo()], self.auto_env())
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertEqual(self.find(["plugin", "profile", "create"]), [])
+                launch = self.find(["assistant", "setup"])[0]
+                self.assertIn("onboard.mode=guided", launch)
+                self.assertFalse(any(a.startswith("onboard.grant") for a in launch))
+                self.assertNotIn(ONBOARD_PROFILE, launch)
+                self.assertIsNone(self.read_record()["profile"])
+
+    def test_the_profile_allows_only_the_granted_items(self):
+        cases = [
+            ("none", "no", CLAUDE_ALLOW, CLAUDE_DENY_NO_HISTORY),
+            ("projects", "no", CLAUDE_ALLOW + ["Bash(pohunek project add *)"], CLAUDE_DENY_NO_HISTORY),
+            ("groups,cli-update", "yes", CLAUDE_ALLOW + [HISTORY_ALLOW, "Bash(pohunek session metadata * --set companion.group=*)",
+                                                       "Bash(claude update)", "Bash(codex update)"], CLAUDE_DENY),
+            ("profiles,profile-hooks", "no", CLAUDE_ALLOW + ["Bash(pohunek plugin profile migrate * --yes)"], CLAUDE_DENY_NO_HISTORY),
+        ]
+        for grant, history, allow, deny in cases:
+            with self.subTest(grant=grant, history=history):
+                self.log.unlink(missing_ok=True)
+                shutil.rmtree(self.state, ignore_errors=True)
+                r = self.run_tool(["--launch-only", "--yes", "--mode", "automatic", "--grant", grant, "--history", history,
+                                   "--agent", "claude", *self.demo()], self.auto_env())
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                argv, values = self.profile_create_args()
+                self.assertEqual(argv[5], "claude")
+                self.assertEqual(values[0], "--allowedTools")
+                cut = values.index("--disallowedTools")
+                self.assertEqual(values[1:cut], allow)
+                self.assertEqual(values[cut + 1:-2], deny)
+                self.assertEqual(values[-2:], ["--permission-mode", "default"])
+                launch = self.find(["assistant", "setup"])[0]
+                self.assertIn("onboard.grant=" + ("" if grant == "none" else grant), launch)
+
+    def test_codex_gets_the_guides_approval_profile(self):
+        r = self.run_tool(["--launch-only", "--yes", "--mode", "automatic", "--grant", "projects", "--agent", "codex",
+                           *self.demo()], self.auto_env())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argv, values = self.profile_create_args()
+        self.assertEqual(argv[5], "codex")
+        self.assertEqual(values, ["--ask-for-approval", "on-request", "--sandbox", "workspace-write",
+                                  "-c", "sandbox_workspace_write.network_access=false"])
+
+    def test_automatic_mode_refuses_what_it_cannot_enforce(self):
+        r = self.run_tool(["--launch-only", "--yes", "--mode", "automatic", "--grant", "none", *self.demo()],
+                          {"DEMO_POHUNEK_ASSISTANT": "present"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Automatic mode needs pohunek 0.43.0 or newer", r.stderr)
+        self.assertEqual(self.writes(), [])
+        r = self.run_tool(["--launch-only", "--yes", "--mode", "automatic", "--grant", "none", "--agent", "pi",
+                           *self.demo()], self.auto_env())
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("runs under Claude or Codex", r.stderr)
+        self.assertEqual(self.writes(), [])
+        r = self.run_tool(["--launch-only", "--yes", "--mode", "automatic", *self.demo()], self.auto_env())
+        self.assertEqual(r.returncode, 2, "no grant is implied by --yes")
+        r = self.run_tool(["--launch-only", "--yes", "--mode", "automatic", "--grant", "managers", *self.demo()], self.auto_env())
+        self.assertEqual(r.returncode, 2, "managers is never offered")
+        self.assert_no_record()
+
+    def test_the_grant_screen_turns_items_off(self):
+        # history n, mode automatic, grant: projects y, groups n, profiles Enter (on), profile-hooks n, cli-update n, start y
+        code, out = self.run_tty(["--launch-only", "--no-wait", "--agent", "claude", *self.demo()], ["n", "y", "y", "n", "", "n", "n", "y"],
+                                 self.auto_env())
+        self.assertEqual(code, 0, out)
+        self.assertIn("applies the items you grant without asking", out)
+        self.assertEqual(self.read_record()["grant"], ["projects", "profiles"])
+        self.assertIn("onboard.grant=projects,profiles", self.find(["assistant", "setup"])[0])
+
+    def test_the_skill_is_offered_per_home_only_with_skill_support(self):
+        # claude y, its skill y, claude:work n, codex n, history n, mode guided, apply y
+        code, out = self.run_tty(["--no-wait", *self.demo()], ["y", "y", "n", "n", "n", "n", "y"], {"DEMO_POHUNEK_ASSISTANT": "present"})
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.find(["integration", "install"]),
+                         [["integration", "install", "--agent", "claude", "--skill", "--json"]])
+        first_apply = next(i for i, a in enumerate(self.argvs()) if a[:2] == ["setup", "--yes"])
+        install = next(i for i, a in enumerate(self.argvs()) if a[:2] == ["integration", "install"])
+        self.assertGreater(install, first_apply, "the skill is installed after setup")
+        self.assertEqual(self.read_record()["skills"], [{"home": "claude", "state": "created"}])
+        self.log.unlink()
+        shutil.rmtree(self.state)
+        code, out = self.run_tty(["--no-wait", *self.demo()], ["y", "n", "n", "n", "n", "y"],
+                                 {"DEMO_POHUNEK_ASSISTANT": "present", "DEMO_POHUNEK_NO_SKILL": "1"})
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("agent skill, so", out)
+        self.assertIn("pohunek 0.42.0 or newer installs it", out)
+        self.assertEqual(self.find(["integration", "install"]), [])
+        r = self.run_tool(["--yes", "--hooks", "claude", "--skill", "claude", *self.demo()],
+                          {"DEMO_POHUNEK_ASSISTANT": "present", "DEMO_POHUNEK_NO_SKILL": "1"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("offers no agent skill", r.stderr)
+
+    @unittest.skipUnless(platform.system() == "Linux" and platform.machine() == "x86_64", "release archives are Linux x86_64")
+    def test_automatic_mode_on_a_fresh_machine(self):
+        self.publish_core(version="0.43.0")
+        self.publish_assistant(version="0.43.0")
+        fresh = {"DEMO_POHUNEK_SERVICE": "install", "DEMO_POHUNEK_VERSION": "0.43.0"}
+        absent = ["--command", str(self.root / "absent" / "pohunek")]
+        r = self.run_tool(["--yes", "--mode", "automatic", "--grant", "none", "--agent", "work", *absent], fresh)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("cannot be checked before pohunek is installed", r.stderr)
+        self.assertEqual(self.writes(), [], "refused before setup")
+        r = self.run_tool(["--yes", "--mode", "automatic", "--grant", "projects", *absent], fresh)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argvs = self.argvs()
+        first_apply = next(i for i, a in enumerate(argvs) if a[:2] == ["setup", "--yes"])
+        create = next(i for i, a in enumerate(argvs) if a[:3] == ["plugin", "profile", "create"])
+        self.assertGreater(create, first_apply, "the profile is written once the daemon runs")
+        self.assertEqual(argvs[create][5], "codex", "no agent picked: the assistant's order")
+        rec = self.read_record()
+        self.assertEqual((rec["mode"], rec["grant"], rec["snapshot"]["taken"]), ("automatic", ["projects"], "after_setup"))
+
+    def test_without_a_recorded_end_undo_removes_only_what_it_can_prove(self):
+        """The reviewer's case: the window was closed before the session ended,
+        and the user added things later; Undo must not take them."""
+        auto = self.auto_env()
+        r = self.run_tool(["--yes", "--mode", "automatic", "--grant", "projects,groups,profiles", "--hooks", "claude",
+                           *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.pohunek("project", "add", "/home/dev/code/new-repo", "--name", "new-repo", "--json", extra=auto)
+        self.pohunek("session", "metadata", "s-01JDEMO00000000000000000A1", "--set", "companion.group=Reviews", "--json", extra=auto)
+        self.pohunek("plugin", "profile", "create", "side", "--base", "claude", "--home", "/home/dev/.claude-side", "--json", extra=auto)
+        self.end_onboard_session()
+        time.sleep(0.05)
+        self.pohunek("project", "add", "/home/dev/code/later", "--name", "later", "--json", extra=auto)
+        self.pohunek("plugin", "profile", "create", "mine", "--base", "claude", "--home", "/home/dev/.claude-mine", "--json", extra=auto)
+        code, out = self.run_tty(["--undo", *self.demo()], ["n"], auto)
+        self.assertEqual(code, 1, out)
+        self.assertIsNone(self.read_record().get("diff"), "a diff read after the fact is never written")
+        self.log.unlink()
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("was not recorded when its session ended", r.stdout)
+        removed = [a for a in self.writes() if a[:2] == ["project", "rm"] or a[:3] in (["plugin", "profile", "rm"],
+                   ["session", "metadata", "s-01JDEMO00000000000000000A1"]) or a[:2] == ["integration", "uninstall"]]
+        self.assertEqual([a[:4] for a in removed], [
+            ["project", "rm", "p-" + hashlib.sha256(b"/home/dev/code/new-repo").hexdigest()[:8], "--json"],
+            ["plugin", "profile", "rm", ONBOARD_PROFILE]], "only the provable items: a manual project from before the end, the tool's own profile")
+        for name in ("later", "mine", "side"):
+            self.assertIn(f" {name}" if name != "later" else "p-" + hashlib.sha256(b"/home/dev/code/later").hexdigest()[:8],
+                          r.stdout)
+        self.assertIn("kept: profile mine: cannot prove onboarding added it", r.stdout)
+        self.assertIn("kept: profile side: cannot prove onboarding added it", r.stdout)
+        self.assertIn("kept: group Reviews of session s-01JDEMO00000000000000000A1: cannot prove", r.stdout)
+        self.assertIn("kept: hooks in claude: cannot prove", r.stdout)
+        names = [p["name"] for p in self.pohunek("plugin", "profile", "list", "--all", "--json", extra=auto)[1]["ok"]["profiles"]]
+        self.assertEqual(sorted(names), ["mine", "side", "work"])
+
+    def test_hooks_are_kept_when_their_removal_would_take_a_skill_from_before(self):
+        auto = self.auto_env()
+        self.pohunek("plugin", "profile", "create", "cwork", "--base", "codex", "--home", "/home/dev/.codex-work", "--json", extra=auto)
+        self.pohunek("integration", "install", "--agent", "codex", "--profile", "cwork", "--skill", "--json", extra=auto)
+        code, out, err = self.run_waiting(["--yes", "--hooks", "codex", *self.demo()], auto)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([i for i in self.read_record()["diff"]["integrations"]],
+                         [{"agent": "codex", "profile": None, "hooks": True, "skill": False}])
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.find(["integration", "uninstall"]), [], "no bare Codex uninstall: it would take the shared skill")
+        self.assertIn("kept: hooks in codex: removing them also removes the pohunek agent skill there, which onboarding did not add",
+                      r.stdout)
+        status = self.pohunek("integration", "status", "--all-profiles", "--json", extra=auto)[1]["ok"]["agents"]
+        cwork = next(a for a in status if a.get("home", {}).get("selector", {}).get("name") == "cwork")
+        self.assertEqual((cwork["state"], cwork["skill"]["state"]), ("current", "current"), "the user's skill stays")
+
+    def test_a_retry_after_a_failed_step_does_not_repeat_the_steps_that_worked(self):
+        auto = self.auto_env()
+
+        def agent_at_work():
+            self.pohunek("project", "add", "/home/dev/code/new-repo", "--name", "new-repo", "--json", extra=auto)
+
+        code, out, err = self.run_waiting(["--yes", "--hooks", "claude", *self.demo()], auto, agent_at_work)
+        self.assertEqual(code, 0, out + err)
+        r = self.run_tool(["--undo", "--yes", *self.demo()], {**auto, "DEMO_POHUNEK_FAIL_PROJECT_RM": "1"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("the steps that worked are recorded and not repeated", r.stderr)
+        self.assertEqual(len(self.find(["integration", "uninstall"])), 1)
+        self.assertIsNone(self.read_record().get("undone_at"))
+        self.pohunek("integration", "install", "--agent", "claude", "--json", extra=auto)  # the user reinstalls them
+        self.log.unlink()
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.find(["integration", "uninstall"]), [], "the user's reinstall is left alone")
+        self.assertEqual(len(self.find(["project", "rm"])), 1)
+        self.assertIn("done in an earlier Undo attempt: hooks in claude", r.stdout)
+        self.assertTrue(self.read_record()["undone_at"])
+
+    def test_a_replaced_onboard_profile_is_named(self):
+        auto = self.auto_env()
+        _, old = self.pohunek("plugin", "profile", "create", ONBOARD_PROFILE, "--base", "claude", "--json", extra=auto)
+        code, out, err = self.run_waiting(["--yes", "--mode", "automatic", "--grant", "none", "--agent", "claude", *self.demo()], auto)
+        self.assertEqual(code, 0, out + err)
+        rec = self.read_record()
+        self.assertEqual(rec["profile"]["replaced"], old["ok"]["file_digest"])
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.find(["plugin", "profile", "rm"]), [])
+        self.assertIn(f"kept: profile {ONBOARD_PROFILE}: this run replaced an earlier version ({old['ok']['file_digest']})", r.stdout)
+
+    def test_undo_refuses_what_the_snapshot_shows_from_before(self):
+        auto = self.auto_env()
+        code, out, err = self.run_waiting(["--yes", *self.demo()], auto)
+        self.assertEqual(code, 0, out + err)
+        rec = self.read_record()
+        work = next(p for p in rec["snapshot"]["profiles"] if p["name"] == "work")
+        first = rec["snapshot"]["projects"][0]
+        rec["diff"]["profiles_created"] = [work]
+        rec["diff"]["projects_added"] = [first]
+        rec["diff"]["groups_set"] = [{"session_id": "s-01JDEMO00000000000000000A2", "group": "Dependencies"}]
+        self.record.write_text(json.dumps(rec))
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([a for a in self.writes() if a[:2] in (["project", "rm"], ["session", "metadata"]) or a[:3] == ["plugin", "profile", "rm"]], [])
+        self.assertIn("refused: profile work: it existed before the run", r.stdout)
+        self.assertIn(f"refused: project {first}: it was registered before the run", r.stdout)
+        self.assertIn("refused: group of session s-01JDEMO00000000000000000A2: the session was not ungrouped before the run", r.stdout)
+
+    def test_undo_passes_only_well_formed_record_values(self):
+        r = self.run_tool(["--launch-only", "--yes", *self.demo()], self.auto_env())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.end_onboard_session()
+        rec = self.read_record()
+        rec["diff"] = {"projects_added": ["--prune-worktrees"], "groups_known": True, "agent_versions": [],
+                       "profiles_created": [{"name": "../work", "file_digest": "sha256:" + "ab" * 32},
+                                            {"name": "x", "file_digest": "--json"}],
+                       "groups_set": [{"session_id": "-s", "group": "G"}],
+                       "integrations": [{"agent": "--all-profiles", "profile": None, "hooks": True, "skill": False}]}
+        self.record.write_text(json.dumps(rec))
+        r = self.run_tool(["--undo", "--yes", *self.demo()], self.auto_env())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([a for a in self.writes() if a[:1] != ["--version"] and a[:2] != ["assistant", "help"]
+                          and a[:2] != ["assistant", "setup"] and a[:1] != ["attach"]], [],
+                         "no malformed value reaches a command")
+
+    def test_the_diff_is_computed_from_the_snapshot_alone(self):
+        status = lambda *homes: {"agents": [{"agent": a, "state": st, "home": {"selector": sel}, "skill": {"state": sk}}
+                                            for a, sel, st, sk in homes]}
+        default, work = {"kind": "default"}, {"kind": "profile", "name": "work"}
+        snapshot = {"projects": ["p-1"], "profiles": [{"name": "work", "file_digest": "sha256:aa"}],
+                    "integrations": status(("claude", default, "not_installed", "absent"), ("codex", default, "current", "absent"),
+                                           ("codex", work, "not_installed", "absent")),
+                    "sessions": [{"id": "s-a", "group": None}, {"id": "s-b", "group": "Old"}],
+                    "agents": [{"agent": "claude", "version": "2.1.3"}, {"agent": "codex", "version": "0.169.0"}]}
+        now = {"projects": [{"id": "p-1"}, {"id": "p-2"}],
+               "profiles": {"profiles": [{"name": "work", "file_digest": "sha256:bb"}, {"name": "new", "file_digest": "sha256:cc"}]},
+               "integrations": status(("claude", default, "current", "current"), ("codex", default, "current", "current"),
+                                      ("codex", work, "not_installed", "current"),
+                                      ("claude", {"kind": "profile", "name": "new"}, "current", "absent")),
+               "sessions": [{"id": "s-a", "metadata": {"companion.group": "G"}}, {"id": "s-b", "metadata": {"companion.group": "New"}},
+                            {"id": "s-own", "metadata": {"companion.group": "X"}}, {"id": "s-later", "metadata": {"companion.group": "Y"}}],
+               "inspect": {"runtimes": [{"agent": "claude", "agent_base": "claude", "version": "2.2.0"},
+                                        {"agent": "codex", "agent_base": "codex", "version": "0.169.0"},
+                                        {"agent": "work", "agent_base": "claude", "version": "9"}]}}
+        out = subprocess.run(["jq", "-n", "--argjson", "snapshot", json.dumps(snapshot), "--argjson", "now", json.dumps(now),
+                              "--arg", "own", "s-own", "-f", str(ROOT / "tools" / "onboard-diff.jq")],
+                             capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(out.stdout), {
+            "projects_added": ["p-2"],
+            "profiles_created": [{"name": "new", "file_digest": "sha256:cc"}],
+            "groups_known": True,
+            "groups_set": [{"session_id": "s-a", "group": "G"}],
+            "integrations": [{"agent": "claude", "profile": None, "hooks": True, "skill": True},
+                             {"agent": "codex", "profile": None, "hooks": False, "skill": True},
+                             {"agent": "codex", "profile": "work", "hooks": False, "skill": True},
+                             {"agent": "claude", "profile": "new", "hooks": True, "skill": False}],
+            "agent_versions": [{"agent": "claude", "before": "2.1.3", "after": "2.2.0"}]})
+        del snapshot["sessions"], snapshot["agents"]
+        out = subprocess.run(["jq", "-n", "--argjson", "snapshot", json.dumps(snapshot), "--argjson", "now", json.dumps(now),
+                              "--arg", "own", "s-own", "-f", str(ROOT / "tools" / "onboard-diff.jq")],
+                             capture_output=True, text=True, check=True)
+        doc = json.loads(out.stdout)
+        self.assertEqual((doc["groups_known"], doc["groups_set"], doc["agent_versions"]), (False, [], []),
+                         "a record without session groups clears none")
+
+
+    def codex_status(self, auto):
+        status = self.pohunek("integration", "status", "--all-profiles", "--json", extra=auto)[1]["ok"]["agents"]
+        return {a["home"]["selector"].get("name"): (a["state"], a["skill"]["state"]) for a in status if a["agent"] == "codex"}
+
+    def test_a_new_codex_home_does_not_claim_the_shared_skill(self):
+        auto = self.auto_env()
+        self.pohunek("integration", "install", "--agent", "codex", "--skill", "--json", extra=auto)
+
+        def agent_at_work():
+            self.pohunek("plugin", "profile", "create", "cside", "--base", "codex", "--home", "/home/dev/.codex-side",
+                         "--json", extra=auto)
+
+        code, out, err = self.run_waiting(["--yes", *self.demo()], auto, agent_at_work)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.read_record()["diff"]["integrations"], [], "the shared skill predates the run")
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.find(["integration", "uninstall"]), [])
+        self.assertEqual([a[:4] for a in self.find(["plugin", "profile", "rm"])], [["plugin", "profile", "rm", "cside"]])
+        self.assertEqual(self.codex_status(auto)[None], ("current", "current"), "the user's hooks and shared skill stay")
+
+    def test_codex_hooks_of_the_run_keep_a_shared_skill_from_before(self):
+        auto = self.auto_env()
+        self.pohunek("plugin", "profile", "create", "cwork", "--base", "codex", "--home", "/home/dev/.codex-work", "--json", extra=auto)
+        self.pohunek("integration", "install", "--agent", "codex", "--profile", "cwork", "--skill", "--json", extra=auto)
+
+        def agent_at_work():
+            self.pohunek("plugin", "profile", "create", "cside", "--base", "codex", "--home", "/home/dev/.codex-side",
+                         "--json", extra=auto)
+
+        code, out, err = self.run_waiting(["--yes", "--hooks", "codex", *self.demo()], auto, agent_at_work)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.read_record()["diff"]["integrations"], [{"agent": "codex", "profile": None, "hooks": True, "skill": False}])
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.find(["integration", "uninstall"]), [], "no bare Codex uninstall: it would take the shared skill")
+        self.assertIn("kept: hooks in codex: removing them also removes the pohunek agent skill there", r.stdout)
+        self.assertEqual(self.codex_status(auto)["cwork"], ("current", "current"))
+
+    def test_undo_refuses_hooks_and_skills_the_snapshot_shows_from_before(self):
+        auto = self.auto_env()
+        self.pohunek("integration", "install", "--agent", "claude", "--json", extra=auto)
+        self.assertEqual(self.pohunek("integration", "install", "--agent", "codex", "--skill", "--json", extra=auto)[0], 0)
+        code, out, err = self.run_waiting(["--yes", *self.demo()], auto)
+        self.assertEqual(code, 0, out + err)
+        rec = self.read_record()
+        self.assertEqual(rec["diff"]["bound"], "session_end")
+        rec["diff"]["integrations"] = [{"agent": "claude", "profile": None, "hooks": True, "skill": False},
+                                       {"agent": "codex", "profile": None, "hooks": False, "skill": True}]
+        self.record.write_text(json.dumps(rec))
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.find(["integration", "uninstall"]), [])
+        self.assertIn("refused: hooks in claude: they were installed before the run", r.stdout)
+        self.assertIn("refused: agent skill of Codex: it was installed before the run", r.stdout)
+
+    def test_a_session_never_seen_running_binds_no_diff(self):
+        auto = self.auto_env(DEMO_POHUNEK_UNLISTED_RUN="1")
+        code, out, err = self.run_waiting(["--yes", *self.demo()], auto)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("pohunek does not list the onboard session, so what the run changed is not recorded", out)
+        self.assertIsNone(self.read_record().get("diff"))
+
+    def test_an_attach_that_lasts_until_the_session_ends_still_binds_the_diff(self):
+        """Without omarchy-launch-or-focus-tui the attach runs in this window, so
+        the first poll already sees the session ended; the launch reply showed
+        it running."""
+        auto = self.auto_env(DEMO_POHUNEK_ATTACH_ENDS="1")
+        r = self.run_tool(["--yes", "--wait", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("what the run changed is recorded for Undo onboarding", r.stdout)
+        self.assertEqual(self.read_record()["diff"]["bound"], "session_end")
+
+    def test_a_session_already_ended_and_never_seen_live_binds_no_diff(self):
+        auto = self.auto_env(DEMO_POHUNEK_LAUNCH_FAILED="1")
+        r = self.run_tool(["--yes", "--wait", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("The onboard session ended before this window saw it running, so what the run changed is not recorded",
+                      r.stdout)
+        self.assertIsNone(self.read_record().get("diff"))
+
+    def test_the_undo_plan_drops_malformed_record_values(self):
+        """The plan's own validation is the only guard here: every malformed
+        value also appears in pohunek's current answers, beside a well-formed one."""
+        digest = "sha256:" + "ab" * 32
+        rows = lambda *names: [{"name": n, "file_digest": d} for n, d in names]
+        home = lambda agent, sel: {"agent": agent, "state": "current", "home": {"selector": sel}, "skill": {"state": "absent"}}
+        manual = lambda pid: {"id": pid, "label": pid, "source": "manual", "added_at": "2026-01-01T00:00:00Z"}
+        plan_in = {
+            "record": {"snapshot": {"projects": [], "profiles": [], "integrations": {"agents": []},
+                                    "sessions": [{"id": "-s", "group": None}, {"id": "s-ok", "group": None}]},
+                       "profile": None},
+            "diff": {"projects_added": ["--prune-worktrees", "p-ok"],
+                     "profiles_created": rows(("-x", digest), ("../work", digest), ("ok2", "--json"), ("ok", digest)),
+                     "groups_set": [{"session_id": "-s", "group": "G"}, {"session_id": "s-ok", "group": "G"}],
+                     "integrations": [{"agent": "--all-profiles", "profile": None, "hooks": True, "skill": False},
+                                      {"agent": "claude", "profile": "-p", "hooks": True, "skill": False},
+                                      {"agent": "claude", "profile": None, "hooks": True, "skill": False}]},
+            "bound": True, "ended": None, "can_rm": True, "done": [], "rm_version": "0.43.0",
+            "now": {"projects": [manual("--prune-worktrees"), manual("p-ok")],
+                    "profiles": {"profiles": rows(("-x", digest), ("../work", digest), ("ok2", "--json"), ("ok", digest), ("-p", digest))},
+                    "sessions": [{"id": "-s", "metadata": {"companion.group": "G"}}, {"id": "s-ok", "metadata": {"companion.group": "G"}}],
+                    "integrations": {"agents": [home("--all-profiles", {"kind": "default"}),
+                                                home("claude", {"kind": "profile", "name": "-p"}),
+                                                home("claude", {"kind": "default"})]}}}
+        out = subprocess.run(["jq", "-n", "--argjson", "in", json.dumps(plan_in), "-f", str(ROOT / "tools" / "onboard-undo.jq")],
+                             capture_output=True, text=True, check=True)
+        actions = json.loads(out.stdout)["actions"]
+        self.assertEqual([a["key"] for a in actions], ["project:p-ok", "profile:ok", "group:s-ok", "hooks:claude:"],
+                         "only the well-formed items, each matched in the current answers")
+        for bad in ("--prune-worktrees", "-x", "../work", "--json", "-s", "--all-profiles", "-p"):
+            self.assertFalse(any(bad in a["argv"][:-1] for a in actions), bad)
 
 
 if __name__ == "__main__":

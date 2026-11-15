@@ -10,14 +10,17 @@ and back with `omarchy bar set pohunek.sessions command pohunek`. Answers the
 read commands the widget uses and the commands tools/onboard calls; anything
 else prints what it would do.
 
-The onboarding answers follow pohunek 0.42.0 (zajca/pohunek tag v0.42.0); the
-source of each document is named where it is built. Optional environment, used
-by tests/onboard_test.py:
+The onboarding answers follow pohunek 0.43.0 (zajca/pohunek tag v0.43.0), and
+0.42.0 where that release answers differently; the source of each document is
+named where it is built. With DEMO_POHUNEK_STATE the projects, profiles,
+session metadata, hooks and agent skills are kept there and change with the
+write commands, so a run and its undo can be compared. Optional environment,
+used by tests/onboard_test.py:
 
   DEMO_POHUNEK_LOG        file under $TMPDIR: one JSON line per call; also makes
                           unknown commands and flags a usage error (exit 2)
-  DEMO_POHUNEK_STATE      directory under $TMPDIR for installed packages, the
-                          onboard session and the service install
+  DEMO_POHUNEK_STATE      directory under $TMPDIR for installed packages,
+                          sessions, projects, profiles, hooks and the service
   DEMO_POHUNEK_VERSION    version `--version` reports (default 0.42.0)
   DEMO_POHUNEK_ASSISTANT  assistant entry of the setup plan: gap (default),
                           install or present
@@ -27,6 +30,17 @@ by tests/onboard_test.py:
   DEMO_POHUNEK_EXTRA_PROBLEM  1: `setup --yes` also fails a doctor check
   DEMO_POHUNEK_INSTALL_DIGEST  digest `plugin install|update` reports as
                           installed instead of the archive's own
+  DEMO_POHUNEK_NO_SKILL   1: `integration status` reports no agent `skill` (a
+                          daemon without the skill install)
+  DEMO_POHUNEK_PROFILE_CHANGED  name of a profile whose file changes between
+                          `plugin profile list` and `create --replace`
+  DEMO_POHUNEK_FAIL_PROJECT_RM  1: `project rm` fails
+  DEMO_POHUNEK_UNLISTED_RUN  1: `session list --meta-eq onboard.run=...` lists
+                          no session (the listing does not show the run's session)
+  DEMO_POHUNEK_ATTACH_ENDS  1: `attach` returns once the onboard session ended
+                          (the user stayed attached until the agent exited)
+  DEMO_POHUNEK_LAUNCH_FAILED  1: `assistant setup` starts the session already
+                          `failed`, with `ended_at` set
 """
 import hashlib, json, os, re, shutil, sys, time
 
@@ -40,6 +54,16 @@ if host in ("workstation",):
     host = "local"
 
 VERSION = os.environ.get("DEMO_POHUNEK_VERSION", "0.42.0")
+
+
+def at_least(version):
+    def parts(v):
+        return tuple(int(x) for x in re.match(r"^(\d+)\.(\d+)\.(\d+)", v).groups())
+    return parts(VERSION) >= parts(version)
+
+
+# `plugin profile rm` and `plugin profile list --all` ship in 0.43.0.
+HAS_PROFILE_RM = at_least("0.43.0")
 PROTOCOL = {"minimum": 5, "maximum": 5}
 ASSISTANT_ID = "pohunek.context.assistant"
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -69,12 +93,19 @@ def ago(seconds):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - seconds))
 
 
+def rfc3339(seconds_ago=0.0):
+    """The daemon's timestamps: RFC3339 UTC with nanoseconds, as the `time` crate
+    formats them (crates/daemon/src/time.rs:12-16)."""
+    t = time.time() - seconds_ago
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + f".{int((t % 1) * 1e9):09d}Z"
+
+
 def env(ok):
     print(json.dumps({"cli_version": VERSION, "protocol": PROTOCOL, "ok": ok}))
 
 
-# Error envelope and exit codes: crates/cli/src/commands/mod.rs:52-79 and
-# crates/cli/src/error.rs:877-907, :1051-1074 (usage errors exit 2).
+# Error envelope and exit codes: crates/cli/src/commands/mod.rs:43-75 and
+# crates/cli/src/error.rs:962-985, :1120-1130 (usage errors exit 2).
 def fail(code, msg, recover=None, status=1, cls="configuration"):
     err = {"class": cls, "code": code, "msg": msg}
     if recover:
@@ -103,11 +134,14 @@ def load(name, default):
 
 
 def save(name, value):
+    """Atomic, so a reader running at the same time never sees half a file."""
     if not STATE:
         return
     os.makedirs(STATE, exist_ok=True)
-    with open(state_path(name), "w", encoding="utf-8") as handle:
+    tmp = state_path(name) + f".{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(value, handle)
+    os.replace(tmp, state_path(name))
 
 
 def session(sid, name, agent, activity, project, group=None, link=None, branch="", updated=60, subagents=0,
@@ -160,7 +194,7 @@ PROJECTS = ["pohunek", "pohunek-companion", "pohunek-companion-android", "ripgre
             "zellij", "wezterm", "alacritty", "hyprland", "quickshell", "omarchy"]
 
 # Hook homes of the planner fixture HOOK_HOMES_REPORT in
-# crates/cli/tests/setup_host.rs:813-829: Claude's default home, the Claude
+# crates/cli/tests/setup_host.rs:827-845: Claude's default home, the Claude
 # profile `work`, and Codex's default home (IntegrationAction,
 # crates/service-config/src/runtimes.rs:376-382).
 HOMES = [("claude", None), ("claude", "work"), ("codex", None)]
@@ -170,7 +204,7 @@ GAPS = [{"runtime": "claude", "code": "config_home_missing", "detail": "its conf
 # MANUAL_COMMAND, crates/cli/src/commands/setup_assistant.rs:27.
 MANUAL_COMMAND = ("pohunek plugin install ./assistant.tar.zst --sha256 <digest-from-the-release-notes> --yes "
                   "(docs/install.md, \"Install the assistant package\")")
-# Index 404: crates/cli/src/commands/plugin.rs:465 with plugin_index.rs:236.
+# Index 404: crates/cli/src/commands/plugin.rs:465 with plugin_index.rs:237.
 INDEX_GAP = "the plugin index cannot be fetched: the server answered 404 Not Found"
 FAKE_DIGEST = "sha256:" + "ab" * 32
 
@@ -200,7 +234,7 @@ def selected_homes(selection):
     known = [home_label(r, p) for r, p in HOMES]
     unknown = [w for w in wanted if w not in known]
     if unknown:
-        # SetupHooksUnknown, crates/cli/src/error.rs:610-617, exit 2 (:1054).
+        # SetupHooksUnknown, crates/cli/src/error.rs:681-688, exit 2 (:1125).
         fail("setup_hooks_unknown",
              f"--hooks names {', '.join(unknown)}, which this host has no agent home for; the homes it has are: {', '.join(known)}",
              "pass `--hooks none`, `--hooks all`, or homes the host has; `pohunek setup --dry-run --json` lists them under `integrations` and `hermes_homes`",
@@ -209,7 +243,7 @@ def selected_homes(selection):
 
 
 def assistant_step():
-    """AssistantStep, crates/cli/src/commands/setup_assistant.rs:29-62."""
+    """AssistantStep, crates/cli/src/commands/setup_assistant.rs:32-62."""
     mode = os.environ.get("DEMO_POHUNEK_ASSISTANT", "gap")
     if mode == "install":
         return {"status": "install", "package_id": ASSISTANT_ID, "version": VERSION, "digest": FAKE_DIGEST}
@@ -219,7 +253,7 @@ def assistant_step():
 
 
 def preview(homes):
-    """Preview, crates/cli/src/commands/setup_host.rs:219-243; ServiceStep :194-203."""
+    """Preview, crates/cli/src/commands/setup_host.rs:219-243; ServiceStep :194-202."""
     service = {"action": "present"} if service_installed() else {
         "action": "install", "from": os.path.dirname(os.path.realpath(__file__))}
     selected = {r for r, p in homes} | {p for r, p in homes if p}
@@ -292,7 +326,7 @@ def cmd_setup(flags):
             save("service-installed", True)
     hooks = [{"integration": r if not p else f"{r} profile {p}", "status": "installed", "detail": None} for r, p in homes]
     applied += [f"hook {h['integration']}: installed" for h in hooks]
-    save("hooks", [home_label(r, p) for r, p in homes])
+    save("hooks", sorted(set(load("hooks", [])) | {home_label(r, p) for r, p in homes}))
     step = plan["assistant"]
     gap = None
     if step["status"] == "gap":
@@ -305,12 +339,12 @@ def cmd_setup(flags):
     if os.environ.get("DEMO_POHUNEK_EXTRA_PROBLEM") == "1":
         problems.append("doctor reports a failed check: daemon: not reachable; run `pohunek doctor`")
     if problems:
-        # SetupIncomplete, crates/cli/src/error.rs:631-636 with changes_text :723-729;
-        # problems joined by "; " in verdict order, setup_host.rs:1561-1612.
+        # SetupIncomplete, crates/cli/src/error.rs:702-707 with changes_text :794-800;
+        # problems joined by "; " in verdict order, setup_host.rs:1561-1610.
         changes = f". Changes made: {'; '.join(applied)}" if applied else ""
         fail("setup_incomplete", f"setup did not complete: {'; '.join(problems)}{changes}",
              "resolve the reported item, then re-run `pohunek setup`; finished steps are kept")
-    # SetupReport, crates/cli/src/commands/setup_host.rs:273-284; Verdict :247-270.
+    # SetupReport, crates/cli/src/commands/setup_host.rs:273-284; Verdict :247-269.
     env({"preview": plan, "applied": applied, "hooks": hooks, "config": {"created": [], "skipped": [plan["config"][0]["path"]]},
          "verdict": {"packages_missing": [], "packages_unexpected": [], "profiles_pending": [], "refusals": [],
                      "hooks_failed": [], "hook_gaps": [], "assistant_gap": None, "catalog": "current",
@@ -326,7 +360,7 @@ def add_package(pid, version, digest):
     for p in listed:
         if p["package"]["id"] == pid:
             p["selected"] = False
-    # PackageInfo, crates/protocol/src/package.rs:141-179.
+    # PackageInfo, crates/protocol/src/package.rs:143-181.
     entry = {"digest": digest, "package": {"id": pid, "version": version}, "origin": "local", "enabled": True,
              "selected": True, "installed_at_unix_seconds": int(time.time()), "referenced": False}
     listed.append(entry)
@@ -356,7 +390,7 @@ def cmd_plugin_ingest(verb, flags):
         fail("plugin_not_installed", f"{flags[0]} is not installed")
     reported = os.environ.get("DEMO_POHUNEK_INSTALL_DIGEST") or "sha256:" + actual
     entry = add_package(ASSISTANT_ID, archive_version(archive), reported)
-    # PackageInstallResult, crates/protocol/src/package.rs:371-410.
+    # PackageInstallResult, crates/protocol/src/package.rs:398-415.
     env({"status": "installed", "package": entry})
 
 
@@ -366,12 +400,15 @@ def cmd_assistant(intent, flags):
     installed = any(p["package"]["id"] == ASSISTANT_ID and p["selected"] for p in packages()) or \
         assistant_step()["status"] == "present"
     agent = option(flags, "--agent") or "codex"
+    if agent not in ("claude", "codex", "pi", "shell") and not any(x["name"] == agent for x in profiles()):
+        # agent_profile_not_found, crates/daemon/src/agent/profile.rs:2011-2023.
+        fail("agent_profile_not_found", f"no agent profile or base kind named '{agent}' on this host", cls="runtime")
     if not installed:
         # assistant_package_missing, crates/daemon/src/assistant.rs:56.
         fail("assistant_package_missing", f"the assistant context package {ASSISTANT_ID} is not installed and selected",
              f"install it: {MANUAL_COMMAND}")
     if "--print-prompt" in flags:
-        # PrintPrompt, crates/cli/src/commands/assistant/mod.rs:211-238.
+        # PrintPrompt, crates/cli/src/commands/assistant/mod.rs:217-237.
         env({"prompt": "(demo prompt)", "agent": agent, "agent_reason": "selected explicitly" if "--agent" in flags else
              "highest-ranked available runtime (codex)", "intent": intent, "snapshot_path": "/demo/snapshot.json",
              "knowledge_bundle_version": VERSION, "knowledge": "materialized"})
@@ -386,13 +423,332 @@ def cmd_assistant(intent, flags):
             meta[key] = value
     sid = "s-01JDEMOONBOARD" + hashlib.sha256(json.dumps(meta, sort_keys=True).encode()).hexdigest()[:12].upper()
     info = session(sid, "pohunek-assistant", agent, "working", "pohunek", updated=5, created=5, extra_meta=meta)
+    if os.environ.get("DEMO_POHUNEK_LAUNCH_FAILED") == "1":
+        # SessionState::Failed, crates/protocol/src/session.rs:2753; ended_at :3422-3429.
+        info.update({"state": "failed", "activity": None, "ended_at": rfc3339()})
     if STATE:
         save("sessions.json", load("sessions.json", []) + [info])
         save("request.txt", request)
-    # Output, crates/cli/src/commands/assistant/mod.rs:285-312; AssistantMeta :125-132.
+    # Output, crates/cli/src/commands/assistant/mod.rs:292-312; AssistantMeta :125-132.
     env({"session": info, "assistant": {"intent": intent, "agent": agent, "knowledge_bundle_version": VERSION,
                                         "snapshot_included": "--no-snapshot" not in flags,
                                         "auto_started_daemon": False, "knowledge": "materialized"}})
+
+
+# ------------------------------------------------------------ stateful objects
+RUNTIME_DIGEST = "sha256:" + "cd" * 32
+SKILL_SHA = "12" * 32
+CLI_VERSIONS = {"claude": "2.1.3", "codex": "0.169.0", "pi": "0.30.2"}
+
+
+def profiles():
+    """Host profiles; `work` is the Claude profile of HOMES with its own home."""
+    return load("profiles.json", None) or [
+        {"name": "work", "base": "claude", "home": "/home/dev/.claude-work", "text": "(work profile)",
+         "file_digest": "sha256:" + "ef" * 32}]
+
+
+def runtime_package(base):
+    """PackageInfo of the runtime package a profile pins, crates/protocol/src/package.rs:143-181."""
+    return {"digest": RUNTIME_DIGEST, "package": {"id": f"pohunek.runtime.{base}", "version": VERSION},
+            "origin": "official", "enabled": True, "selected": True, "installed_at_unix_seconds": 1, "referenced": True}
+
+
+def project_rows():
+    """ProjectInfo, crates/protocol/src/project.rs:57-85 (source :20-33)."""
+    rows = load("projects.json", None)
+    if rows is None:
+        rows = [{"id": f"p-{i:08x}", "label": p, "source": "auto" if i % 4 == 3 else "manual",
+                 "added_at": rfc3339(86400 * (30 + i)), "last_used_at": ago(i * 3600)} for i, p in enumerate(PROJECTS)]
+    return rows
+
+
+def local_sessions():
+    """The demo sessions of this host plus the started ones, with metadata changes applied."""
+    meta = load("metadata.json", {})
+    rows = []
+    for info in SESSIONS["local"] + load("sessions.json", []):
+        info = dict(info)
+        if info["id"] in meta:
+            info["metadata"] = meta[info["id"]]
+        rows.append(info)
+    return rows
+
+
+def homes():
+    """Config homes as `integration status --all-profiles` reports them: one per
+    distinct home (IntegrationHome, crates/protocol/src/integration.rs:148-164);
+    a profile without its own home shares its runtime's default home."""
+    out = [{"runtime": r, "label": r, "bare": True, "profiles": []} for r in ("claude", "codex")]
+    for prof in profiles():
+        if prof["base"] not in ("claude", "codex"):
+            continue
+        if prof.get("home"):
+            out.append({"runtime": prof["base"], "label": f"{prof['base']}:{prof['name']}", "bare": False,
+                        "profiles": [prof["name"]]})
+        else:
+            next(h for h in out if h["label"] == prof["base"])["profiles"].append(prof["name"])
+    return out
+
+
+def home_json(home):
+    doc = {}
+    if home["profiles"]:
+        doc["profiles"] = sorted(home["profiles"])
+    if home["bare"]:
+        doc["bare"] = True
+        doc["selector"] = {"kind": "default"}
+    else:
+        doc["selector"] = {"kind": "profile", "name": home["profiles"][0]}
+    return doc
+
+
+def skill_key(home):
+    # Codex reads skills from ~/.agents/skills, shared by every home (cli.md "integration install").
+    return "codex" if home["runtime"] == "codex" else home["label"]
+
+
+def skill_path(home):
+    if home["runtime"] == "codex":
+        return "/home/dev/.agents/skills/pohunek/SKILL.md"
+    return f"/home/dev/.{home['label'].replace(':', '-')}/skills/pohunek/SKILL.md"
+
+
+def find_home(agent, profile):
+    if agent not in ("claude", "codex"):
+        fail("integration_agent_unsupported", f"`{agent}` has no daemon-managed hook integration", status=1)
+    if profile is None:
+        return next(h for h in homes() if h["label"] == agent)
+    prof = next((x for x in profiles() if x["name"] == profile), None)
+    if prof is None:
+        # agent_profile_not_found, crates/daemon/src/agent/profile.rs:2011-2023.
+        fail("agent_profile_not_found", f"no agent profile or base kind named '{profile}' on this host",
+             "use `shell` or an installed runtime (`pohunek plugin list`), or add ~/.config/pohunek/agents/<name>.toml on the target host",
+             cls="runtime")
+    if prof["base"] != agent:
+        # profile_runtime_mismatch, crates/daemon/src/integration/homes.rs:439-454.
+        fail("integration_profile_runtime_mismatch", f"profile `{profile}` extends runtime `{prof['base']}`, not `{agent}`",
+             f"pass --agent {prof['base']}, or a profile of {agent}")
+    return next(h for h in homes() if profile in h["profiles"])
+
+
+def status_entry(home, profile_aware):
+    """IntegrationAgentStatus, crates/protocol/src/integration.rs:243-276; AgentSkillStatus :384-400."""
+    hooks = home["label"] in load("hooks", [])
+    entry = {"agent": home["runtime"], "available": True, "expected_asset_paths": [], "present_asset_paths": [],
+             "registration_paths": [], "installed_version": 1 if hooks else None, "expected_version": 1,
+             "state": "current" if hooks else "not_installed", "recovery": "none" if hooks else "reinstall",
+             "warnings": []}
+    if profile_aware:
+        entry["home"] = home_json(home)
+    if os.environ.get("DEMO_POHUNEK_NO_SKILL") != "1":
+        skilled = skill_key(home) in load("skills", [])
+        entry["skill"] = {"state": "current" if skilled else "absent", "path": skill_path(home),
+                          "expected_sha256": SKILL_SHA, "shared": home["runtime"] == "codex"}
+        if skilled:
+            entry["skill"]["installed_sha256"] = SKILL_SHA
+    return entry
+
+
+def cmd_integration(verb, flags):
+    check_flags(flags, {"--json", "--all-profiles", "--skill"}, {"--agent", "--profile"})
+    agent, profile = option(flags, "--agent"), option(flags, "--profile")
+    if verb == "status":
+        aware = "--all-profiles" in flags or profile is not None
+        if profile is not None:
+            selected = [find_home(agent or "claude", profile)]
+        elif "--all-profiles" in flags:
+            selected = [h for h in homes() if agent in (None, h["runtime"])]
+        else:
+            selected = [h for h in homes() if h["bare"] and agent in (None, h["runtime"])]
+        # IntegrationStatusResult, crates/protocol/src/integration.rs:228-237.
+        result = {"agents": [status_entry(h, aware) for h in selected]}
+        if aware:
+            result["home_selectors"] = True
+        env(result)
+        return
+    if not agent:
+        usage("the following required arguments were not provided: --agent <AGENT>")
+    if "--skill" in flags and os.environ.get("DEMO_POHUNEK_NO_SKILL") == "1":
+        fail("integration_agent_skill_daemon_unsupported", "the daemon does not support installing the agent skill")
+    home = find_home(agent, profile)
+    hooks, skills = set(load("hooks", [])), set(load("skills", []))
+    if verb == "install":
+        hooks.add(home["label"])
+        report = {"agent": agent, "hook_path": "/home/dev/.local/share/pohunek/hooks/pohunek-agent-state.sh",
+                  "config_paths": [], "cleanup_incomplete": []}
+        if profile is not None:
+            report["home"] = home_json(home)
+        if "--skill" in flags:
+            found = "current" if skill_key(home) in skills else "absent"
+            skills.add(skill_key(home))
+            # AgentSkillReport, crates/protocol/src/integration.rs:367-378.
+            report["skill"] = {"state": "unchanged" if found == "current" else "created", "found": found,
+                               "path": skill_path(home)}
+        save("hooks", sorted(hooks))
+        save("skills", sorted(skills))
+        # IntegrationInstallResult, crates/protocol/src/integration.rs:184-196.
+        env({"installed": [report]})
+        return
+    # IntegrationUninstallReport, crates/protocol/src/integration.rs:541-569.
+    report = {"agent": agent, "removed_paths": [], "updated_paths": [], "preserved_paths": [], "cleanup_incomplete": []}
+    if "--skill" in flags:
+        report["state"] = "unchanged"
+    else:
+        report["state"] = "removed" if home["label"] in hooks else "not_installed"
+        hooks.discard(home["label"])
+    if skill_key(home) not in skills:
+        report["skill"] = "not_installed"
+    elif home["runtime"] == "codex" and profile is not None:
+        report["skill"] = "kept_shared"
+    else:
+        report["skill"] = "removed"
+        skills.discard(skill_key(home))
+    if profile is not None:
+        report["home"] = home_json(home)
+    save("hooks", sorted(hooks))
+    save("skills", sorted(skills))
+    env({"uninstalled": [report]})
+
+
+def profile_text(base, home, extra, secrets):
+    lines = [f"base = {json.dumps(base)}", f"package = {json.dumps('pohunek.runtime.' + base)}",
+             f"digest = {json.dumps(RUNTIME_DIGEST)}", f"args = {json.dumps(extra)}"]
+    if secrets:
+        lines.append(f"secret_env = {json.dumps(secrets)}")
+    if home:
+        lines += ["", "[env]", f"{base.upper()}_CONFIG_DIR = {json.dumps(home)}"]
+    return "\n".join(lines) + "\n"
+
+
+def profile_error(code, msg, recover):
+    # PackageErrorKind, crates/protocol/src/package.rs:1024-1038 (codes), :1095-1112
+    # (messages), :1180-1200 (recovery); class runtime (:1231-1236), exit 1.
+    fail(code, msg, recover, cls="runtime")
+
+
+def cmd_profile_create(flags):
+    check_flags(flags[1:], {"--json", "--dry-run"}, {"--base", "--home", "--arg", "--secret-env", "--replace"})
+    name, base = flags[0], option(flags, "--base")
+    if not base:
+        usage("the following required arguments were not provided: --base <RUNTIME>")
+    extra = [flags[i + 1] for i, f in enumerate(flags) if f == "--arg" and i + 1 < len(flags)]
+    secrets = [flags[i + 1] for i, f in enumerate(flags) if f == "--secret-env" and i + 1 < len(flags)]
+    home, replace = option(flags, "--home"), option(flags, "--replace")
+    text = profile_text(base, home, extra, secrets)
+    digest = "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+    listed = profiles()
+    current = next((x for x in listed if x["name"] == name), None)
+    if current and replace is None:
+        profile_error("package_profile_exists", "an agent profile of that name exists and the request did not name its digest",
+                      "pass `--replace` with the digest from `pohunek plugin profile list --json`, or choose another name")
+    if replace is not None and (current is None or current["file_digest"] != replace
+                                or os.environ.get("DEMO_POHUNEK_PROFILE_CHANGED") == name):
+        profile_error("package_profile_digest_mismatch",
+                      "the agent profile is not the file version the request named, and was left as found",
+                      "read the current digest with `pohunek plugin profile list --json` and repeat the command")
+    status = "preview" if "--dry-run" in flags else ("replaced" if current else "created")
+    if status != "preview":
+        entry = {"name": name, "base": base, "home": home, "text": text, "file_digest": digest}
+        save("profiles.json", [x for x in listed if x["name"] != name] + [entry])
+    # PackageCreateProfileResult, crates/protocol/src/package.rs:676-710.
+    result = {"status": status, "profile": name, "base": base, "package": runtime_package(base),
+              "text": text, "file_digest": digest}
+    if home:
+        result["home_env"] = f"{base.upper()}_CONFIG_DIR"
+    if current:
+        result["previous"] = current["file_digest"]
+    env(result)
+
+
+def cmd_profile_rm(flags):
+    check_flags(flags[1:], {"--json"}, {"--digest"})
+    name, digest = flags[0], option(flags, "--digest")
+    if not digest:
+        usage("the following required arguments were not provided: --digest <DIGEST>")
+    listed = profiles()
+    current = next((x for x in listed if x["name"] == name), None)
+    if current is None:
+        profile_error("package_profile_not_found", f"no agent profile named `{name}`", None)
+    if current["file_digest"] != digest:
+        profile_error("package_profile_digest_mismatch",
+                      "the agent profile is not the file version the request named, and was left as found",
+                      "read the current digest with `pohunek plugin profile list --json` and repeat the command")
+    if any(r["agent"] == name and r["state"] in ("starting", "running") for r in local_sessions()):
+        profile_error("package_profile_in_use", f"a session uses the agent profile `{name}`", "stop the session first")
+    save("profiles.json", [x for x in listed if x["name"] != name])
+    # PackageRemoveProfileResult, crates/protocol/src/package.rs:737-742.
+    env({"profile": name, "file_digest": digest})
+
+
+def cmd_profile_list(flags):
+    check_flags(flags, {"--json"} | ({"--all"} if HAS_PROFILE_RM else set()), set())
+    # ProfileEntry and ProfileListing, crates/cli/src/commands/plugin_profile.rs:668-704.
+    entries = [{"name": x["name"], "base": x["base"], "package": f"pohunek.runtime.{x['base']}",
+                "digest": RUNTIME_DIGEST, "file_digest": x["file_digest"], "state": "pinned"} for x in profiles()]
+    listing = {"profiles": entries, "truncated": False}
+    if HAS_PROFILE_RM:
+        listing["hidden"] = 0
+    env(listing)
+
+
+def cmd_session_metadata(flags):
+    check_flags(flags[1:], {"--json"}, {"--set", "--clear"})
+    sid = flags[0] if flags else ""
+    rows = local_sessions()
+    info = next((r for r in rows if r["id"] == sid), None)
+    if info is None:
+        fail("session_not_found", f"session {sid} not found", cls="runtime")
+    meta = dict(info["metadata"])
+    for i, f in enumerate(flags):
+        if f == "--set" and i + 1 < len(flags):
+            key, _, value = flags[i + 1].partition("=")
+            meta[key] = value
+        elif f == "--clear" and i + 1 < len(flags):
+            meta.pop(flags[i + 1], None)
+    store = load("metadata.json", {})
+    store[sid] = meta
+    save("metadata.json", store)
+    info["metadata"] = meta
+    # SessionSetMetadataResult, crates/protocol/src/session.rs:4269-4272.
+    env({"session": info})
+
+
+def session_filter(flags):
+    """`session list --meta-eq k=v`, `--meta-has k`, `--filter state=X`, combined with AND."""
+    rows = local_sessions()
+    for i, f in enumerate(flags):
+        value = flags[i + 1] if i + 1 < len(flags) else ""
+        if f == "--meta-eq":
+            key, _, want = value.partition("=")
+            rows = [r for r in rows if r["metadata"].get(key) == want]
+            if key == "onboard.run" and os.environ.get("DEMO_POHUNEK_UNLISTED_RUN") == "1":
+                rows = []
+        elif f == "--meta-has":
+            rows = [r for r in rows if value in r["metadata"]]
+        elif f == "--filter" and value.startswith("state="):
+            rows = [r for r in rows if r["state"] == value[len("state="):]]
+    return rows
+
+
+def cmd_project(verb, flags):
+    rows = project_rows()
+    if verb == "add":
+        check_flags(flags[1:], {"--json"}, {"--name", "--base-branch"})
+        path = flags[0] if flags else ""
+        entry = {"id": "p-" + hashlib.sha256(path.encode()).hexdigest()[:8], "label": option(flags, "--name") or os.path.basename(path),
+                 "source": "manual", "added_at": rfc3339(), "last_used_at": ago(0)}
+        save("projects.json", [r for r in rows if r["id"] != entry["id"]] + [entry])
+        env(entry)
+        return
+    check_flags(flags[1:], {"--json", "--prune-worktrees"}, set())
+    ref = flags[0] if flags else ""
+    if os.environ.get("DEMO_POHUNEK_FAIL_PROJECT_RM") == "1":
+        fail("project_remove_failed", f"project {ref} could not be removed", cls="runtime")
+    kept = [r for r in rows if r["id"] != ref]
+    save("projects.json", kept)
+    # ProjectRemoveResult, crates/protocol/src/project.rs:377-387.
+    env({"removed": len(kept) != len(rows), "pruned_worktrees": 0})
 
 
 def main():
@@ -404,7 +760,7 @@ def main():
         return
     if args[:2] == ["service", "check"]:
         check_flags(args[2:], {"--json"}, set())
-        # CheckReport, crates/cli/src/service/report.rs:295-314.
+        # CheckReport, crates/cli/src/service/report.rs:296-334.
         env({"operation": "install" if not service_installed() else "none", "version": VERSION, "prefix": prefix(),
              "namespace": "default", "config_path": os.path.join(os.path.expanduser("~"), ".config", "pohunek", "service.toml"),
              "pending_transaction": None, "pending_action": None, "locked": False, "preflight": None,
@@ -418,47 +774,81 @@ def main():
         cmd_plugin_ingest(args[1], args[2:])
         return
     if args[:3] == ["plugin", "profile", "list"]:
-        check_flags(args[3:], {"--json"}, set())
-        # ProfileListing, crates/cli/src/commands/plugin_profile.rs:459-482.
-        env({"profiles": [{"name": "work", "base": "claude", "package": "pohunek.runtime.claude",
-                           "digest": "sha256:" + "cd" * 32, "file_digest": "sha256:" + "ef" * 32, "state": "pinned"}],
-             "truncated": False})
+        cmd_profile_list(args[3:])
         return
-    if args[:2] == ["integration", "status"]:
-        check_flags(args[2:], {"--json", "--all-profiles"}, {"--agent", "--profile"})
-        # IntegrationStatusResult, crates/protocol/src/integration.rs:228-262 and
-        # AgentSkillStatus :384-394 (fixture fields as in crates/cli/tests/integration_hooks.rs:771-779).
-        installed = load("hooks", [])
-        env({"agents": [{"agent": a, "available": True, "expected_asset_paths": [], "present_asset_paths": [],
-                         "registration_paths": [], "installed_version": 1 if a in installed else None,
-                         "expected_version": 1, "state": "current" if a in installed else "not_installed",
-                         "recovery": "none" if a in installed else "reinstall", "warnings": [],
-                         "skill": {"state": "absent", "expected_sha256": "12" * 32, "shared": False}}
-                        for a in ("claude", "codex")]})
+    if args[:3] == ["plugin", "profile", "create"] and len(args) > 3:
+        cmd_profile_create(args[3:])
+        return
+    if args[:3] == ["plugin", "profile", "rm"] and len(args) > 3 and HAS_PROFILE_RM:
+        cmd_profile_rm(args[3:])
+        return
+    if args[:2] == ["plugin", "uninstall"] and len(args) > 2:
+        check_flags(args[3:], {"--yes", "--json"}, {"--digest"})
+        if "--yes" not in args:
+            fail("plugin_consent_required", "repeat with --yes to uninstall the package")
+        digest = option(args, "--digest")
+        gone = [p for p in packages() if p["package"]["id"] == args[2] and digest in (None, p["digest"])]
+        save("packages.json", [p for p in packages() if p not in gone])
+        # PackageUninstallResult, crates/protocol/src/package.rs:467-472.
+        env({"digest": gone[0]["digest"] if gone else digest, "reloaded": True})
+        return
+    if args[:2] == ["integration", "status"] or (args[:2] in (["integration", "install"], ["integration", "uninstall"])):
+        cmd_integration(args[1], args[2:])
+        return
+    if args[:2] == ["session", "metadata"]:
+        cmd_session_metadata(args[2:])
+        return
+    if args[:2] in (["project", "add"], ["project", "rm"]):
+        cmd_project(args[1], args[2:])
+        return
+    if args[:2] == ["service", "uninstall"]:
+        check_flags(args[2:], {"--json"}, set())
+        live = [r for r in local_sessions() if r["state"] == "running"]
+        if live:
+            # LiveSessions, crates/cli/src/service/error.rs:479-488 with live_summary
+            # :1442-1458 and the hint :1198-1200; class configuration, error.rs:827-835.
+            names = ", ".join(f"{r['id']} ({r['name']})" for r in live)
+            fail("service_live_sessions", f"uninstall refused: live sessions remain; sessions: {names}",
+                 "stop the sessions first, or pass --stop-sessions to stop them as part of uninstall")
+        env({"removed": True})
         return
     if args[:1] == ["assistant"] and len(args) > 1 and args[1] in ("setup", "help", "project", "update", "debug"):
         cmd_assistant(args[1], args[2:])
         return
     if args[:1] == ["attach"]:
         print("demo-pohunek: attach " + " ".join(args[1:]) + " (demo mode: no terminal)")
+        if os.environ.get("DEMO_POHUNEK_ATTACH_ENDS") == "1" and STATE:
+            rows = load("sessions.json", [])
+            for row in rows:
+                if row["id"] in args[1:]:
+                    row["state"], row["activity"], row["ended_at"] = "stopped", None, rfc3339()
+            save("sessions.json", rows)
         return
 
     cmd = [a for a in args if a not in ("--json", "--unread", "--refresh", "-q")]
     if cmd[:2] == ["session", "list"]:
-        extra = load("sessions.json", []) if host == "local" else []
-        env(SESSIONS.get(host, []) + extra)
+        env(session_filter(cmd[2:]) if host == "local" else SESSIONS.get(host, []))
     elif cmd[:2] == ["notifications", "list"]:
         env({"notifications": NOTES.get(host, [])})
     elif cmd[:2] == ["host", "discover"]:
         env([{"name": "workstation" if h == "local" else h, "fqdn": f"{h}.mesh", "address": a, "port": 18722,
               "overlay": "netbird", "local": h == "local", "classification": "reachable_daemon"} for h, a in ADDRESSES.items()])
     elif cmd[:2] == ["host", "inspect"]:
-        # HostCapabilities and AgentRuntime, crates/protocol/src/capabilities.rs:27-64, :97-110.
+        # HostCapabilities, crates/protocol/src/capabilities.rs:153-161, :323, :346, :356;
+        # AgentRuntime :67-110 (`version` only where a probe recognized it). A
+        # profile is a runtime entry of its own, with its base as `agent_base`.
+        versions = {**CLI_VERSIONS, **load("cli-versions.json", {})}
+        runtimes = [{"agent": a, "agent_base": a, "available": True,
+                     **({"version": versions[a], "supported": True} if a != "shell" else {})}
+                    for a in ("claude", "codex", "shell", "pi")]
+        runtimes += [{"agent": x["name"], "agent_base": x["base"], "available": True,
+                      "version": versions[x["base"]], "supported": True} for x in profiles() if x["base"] in versions]
         env({"daemon_version": VERSION, "protocol_version": 5, "supported_agents": ["claude", "codex", "shell", "pi"],
-             "runtimes": [{"agent": a, "agent_base": a, "available": True, **({"supported": True} if a != "shell" else {})}
-                          for a in ("claude", "codex", "shell", "pi")]})
+             "runtimes": runtimes, "package_create_profile_supported": True,
+             "package_remove_profile_supported": HAS_PROFILE_RM,
+             "integration_agent_skill_supported": os.environ.get("DEMO_POHUNEK_NO_SKILL") != "1"})
     elif cmd[:2] == ["project", "list"]:
-        env([{"id": f"p-{i:08x}", "label": p, "last_used_at": ago(i * 3600)} for i, p in enumerate(PROJECTS)])
+        env(project_rows())
     elif STRICT:
         usage("unrecognized subcommand '" + " ".join(args) + "'")
     else:

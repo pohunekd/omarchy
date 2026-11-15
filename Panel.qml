@@ -423,6 +423,7 @@ Panel {
           readonly property string cardState: pohunek.onboarding.state
           readonly property var agents: pohunek.onboardAgents
           property string agent: ""
+          property string mode: "guided"
           readonly property string pickedAgent: agents.indexOf(agent) >= 0 ? agent : (agents.length > 0 ? agents[0] : "")
           Layout.fillWidth: true
           Layout.topMargin: Style.space(6)
@@ -473,6 +474,33 @@ Panel {
                 }
               }
             }
+            // Guided proposes each change; Automatic applies the items granted
+            // in the terminal, under the pohunek-onboard profile.
+            Flow {
+              Layout.fillWidth: true
+              visible: onboardCard.cardState === "ready"
+              spacing: Style.space(6)
+              Label { text: root.t("onboard.mode"); color: root.dim; font.pixelSize: Style.font.bodySmall }
+              Chip {
+                text: root.t("onboard.modeGuided")
+                selected: onboardCard.mode === "guided"
+                onClicked: onboardCard.mode = "guided"
+              }
+              Chip {
+                text: root.t("onboard.modeAutomatic")
+                selected: onboardCard.mode === "automatic"
+                onClicked: onboardCard.mode = "automatic"
+              }
+            }
+            Label {
+              Layout.fillWidth: true
+              visible: onboardCard.cardState === "ready"
+              text: onboardCard.mode === "automatic" ? root.t("onboard.modeAutomaticText") : root.t("onboard.modeGuidedText")
+              color: root.dim
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+              elide: Text.ElideNone
+            }
             Flow {
               Layout.fillWidth: true
               spacing: Style.space(8)
@@ -491,7 +519,7 @@ Panel {
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onClicked: {
-                  pohunek.startOnboarding(true, onboardCard.agents.length > 1 ? onboardCard.pickedAgent : "")
+                  pohunek.startOnboarding(true, onboardCard.agents.length > 1 ? onboardCard.pickedAgent : "", onboardCard.mode)
                   root.close()
                 }
               }
@@ -1671,6 +1699,8 @@ Panel {
             fontFamily: root.fontFamily
             onClicked: { pohunek.runTool("add-shortcuts"); root.close() }
           }
+          // Run onboarding again also brings back a card that Not now hid;
+          // Undo only while the recorded run started a session and was not undone.
           Button {
             visible: pohunek.installed
             text: root.t("help.onboardAgain")
@@ -1678,6 +1708,14 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             onClicked: { pohunek.onboardAgain(); root.page = "list" }
+          }
+          Button {
+            visible: pohunek.installed && pohunek.onboardingRecordPresent
+            text: root.t("help.onboardUndo")
+            bordered: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: { pohunek.undoOnboarding(); root.close() }
           }
 
           // What the colours mean.

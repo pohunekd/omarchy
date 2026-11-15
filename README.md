@@ -29,7 +29,8 @@ That is the whole install. No pohunek on the machine yet? The panel's
 **Get started** card offers **Set up pohunek**: it fetches the latest release,
 verifies it, shows everything it will change, asks once, and then starts an
 onboard manager that walks you through your projects, groups, agent profiles
-and hooks, one proposal at a time.
+and hooks, one proposal at a time, or in automatic mode applies the items you
+grant. **Undo onboarding** in Help reverses what it added.
 
 ## Requirements
 
@@ -37,7 +38,7 @@ and hooks, one proposal at a time.
 |---|---|---|
 | [Omarchy](https://omarchy.org) with the Quattro shell | the plugin host | Quickshell is part of the Omarchy shell; the plugin ships no copy of it |
 | `python3` | `fetch.py`, the session snapshot | standard library only, nothing to `pip install` |
-| the [`pohunek`](https://pohunek.dev) CLI and its daemon | every session, on this machine and on any host you follow | the widget is a client and owns no session state; **Set up pohunek** in the panel (`tools/onboard`) or `tools/install-pohunek` installs it with a checksum and attestation check; onboarding needs pohunek 0.42.0 or newer |
+| the [`pohunek`](https://pohunek.dev) CLI and its daemon | every session, on this machine and on any host you follow | the widget is a client and owns no session state; **Set up pohunek** in the panel (`tools/onboard`) or `tools/install-pohunek` installs it with a checksum and attestation check; onboarding needs pohunek 0.42.0 or newer, automatic mode and removing profiles in Undo 0.43.0 or newer |
 
 Optional, each used by one feature only: `gh` (verifies the build attestation
 while installing pohunek), `herdr` (the machine list behind **Install there**
@@ -53,7 +54,10 @@ omarchy plugin remove pohunek.sessions
 This disables the widget and deletes the plugin folder (it asks first; add
 `--yes` to skip the question). The plugin never changes anything outside that
 folder, apart from the one state file below. The tools write elsewhere only when
-you run them, and their changes are undone by hand:
+you run them. **Undo onboarding** in the panel's Help (`tools/onboard --undo`)
+reverses in one step what the recorded onboarding run provably added (see
+"Safe by design" for what it can prove): it lists every item, asks once, and
+names what it keeps. The rest is undone by hand:
 
 | Written by | Where | Undo |
 |---|---|---|
@@ -62,9 +66,14 @@ you run them, and their changes are undone by hand:
 | **Set up network** / `tools/setup-network` | `~/.config/pohunek/overlays.toml`; the NetBird or Tailscale client (AUR `netbird-bin` with a system service, or Omarchy's tailscale service); a joined overlay network | restore your overlay choice; leave the network with `netbird down` or `sudo tailscale down`; remove the client with your package manager or `omarchy` if you do not use it otherwise |
 | **Roll out** / `tools/distribute` | on each target machine over SSH: this plugin, pohunek, and `overlays.toml` | remove them there the same way |
 | **Install pohunek** / `tools/install-pohunek`, **Set up pohunek** / `tools/onboard` | the pohunek daemon and CLI (a user service, through `pohunek setup`); only when you answer yes, pohunek's agent hooks in `~/.claude` and `~/.codex` | pohunek is a separate program: remove it and its hooks as [pohunek.dev](https://pohunek.dev) describes (`pohunek integration --help` and `pohunek integration doctor` show what is installed) |
-| **Get started** / `tools/onboard` | the onboarding record `~/.local/state/omarchy/pohunek-onboarding.json` (mode 0600: run id, your choices, project ids, profile names with file digests, hook state; no secrets, no session content) | delete the file; the card then offers onboarding again |
+| **Get started** / `tools/onboard` | the onboarding record `~/.local/state/omarchy/pohunek-onboarding.json` (mode 0600: run id, your choices, project ids, profile names with file digests, hook and skill state, session groups, agent CLI versions, and what the run changed, recorded when the onboard session ends while the tool's window is still open; no secrets, no session content) | delete the file; the card then offers onboarding again. Delete it only after **Undo onboarding**: Undo reads it |
+| **Undo onboarding** / `tools/onboard --undo` | the one-step path for the rows below that the recorded run provably added: projects, profiles it created (unless edited since), session groups it set (unless changed since), hooks and agent skills it installed (hooks whose removal would also take a skill that was there before are kept); agent CLI updates are listed, never reverted | it asks once (without a terminal only with `--yes`); everything it keeps is listed with its command; the assistant package and `pohunek service uninstall` are offered after it, both defaulting to no |
+| the onboard agent, with your yes (guided) or the grant `projects` (automatic) | registered projects (`pohunek project add`); the repositories themselves are never changed | `pohunek project rm <id>` (it never deletes a repository) |
+| the onboard agent, with your yes (guided) or the grant `profiles` (automatic, after it asked you) | created host agent profiles | `pohunek plugin profile rm <name> --digest <file_digest from pohunek plugin profile list --all --json>` (pohunek 0.43.0 or newer) |
+| **Get started** / `tools/onboard`, automatic mode | the `pohunek-onboard` agent profile it launches the onboard session with (written through `pohunek plugin profile create`; no `[env]`, no home) | `pohunek plugin profile rm pohunek-onboard --digest <file_digest>`; it is replaced, at its digest, on the next automatic run |
 | **Get started** / `tools/onboard`, when `pohunek setup` cannot install it | the assistant package `pohunek.context.assistant`, verified against its `SHA256SUMS`, the core release notes and, with `gh` signed in, its build attestation | `pohunek plugin uninstall pohunek.context.assistant --yes` (refused while a session uses it) |
 | **Get started** / `tools/onboard`, per agent home you tick | pohunek's hooks in that agent home (all homes start unticked) | `pohunek integration uninstall --agent <agent>`, with `--profile <name>` for a profile's home |
+| **Get started** / `tools/onboard`, per agent home you tick the skill for (pohunek 0.42.0 or newer) | the pohunek agent skill (`pohunek integration install --agent <agent> --skill`, with that home's hooks): `<skills dir>/pohunek/SKILL.md` with its ownership marker; Codex's is shared by every Codex home | `pohunek integration uninstall --agent <agent> --skill` (add `--profile <name>` for a Claude profile's home); it keeps a skill you edited |
 
 ---
 
@@ -248,8 +257,51 @@ IPC for your own bindings: `omarchy-shell pohunek.sessions toggle | newSession |
   the session runs with your agent's default profile, so in guided mode its
   commands are held back only by your agent's own permission prompts. The tool
   itself writes nothing before your one yes; beyond what `pohunek setup`
-  applies, it adds only the onboarding record and, when setup cannot, the
-  verified assistant package.
+  applies, it adds only the onboarding record, the agent skills you ticked and,
+  when setup cannot, the verified assistant package.
+- **Automatic mode applies only what you grant.** It needs pohunek 0.43.0 or
+  newer and Claude or Codex. The terminal lists the grant items (register
+  projects, group ungrouped sessions, migrate profiles, hooks for a profile
+  created in the run, the agent CLI's own update), each on and each can be
+  turned off, and confirms them once with the rest. The session then runs under
+  the `pohunek-onboard` profile that the tool writes for this run from the
+  onboarding guide's table: under Claude, an allowlist of the read-only pohunek
+  commands plus the commands of the granted items, a deny list of the guide's
+  floor, and the default permission mode, so the rest asks first; under
+  Codex, which has no per-profile allowlist, pohunek commands ask for your
+  approval. Your own permission settings still apply on top: a command that
+  your Claude allow rules allow runs without a prompt unless one of the
+  profile's deny rules matches it (check them with `/permissions`), and a
+  command that your Codex command rules (`rules/` in your Codex home) allow
+  runs without a prompt. The profile has no `[env]` and no home of its own,
+  never a bypass flag. A new profile and new hook files are confirmed with you in every
+  mode. The floor holds in every mode and under every grant: no transcripts,
+  history files, credentials or profile secrets, no writes into a repository,
+  no `sudo`, no setup, service, package or removal commands, and nothing on
+  another host. The deny rules match command text, which Claude Code documents
+  as no security boundary, so the floor is also part of the session's
+  instructions.
+- **Undo removes only what it can prove the run added.** The tool's window
+  stays open after the launch until the onboard session ends, and then records
+  what changed between the snapshot taken before setup and that moment, from
+  pohunek's own `--json` answers. That includes anything you changed yourself
+  while the session ran. With that record, Undo removes the projects the run
+  registered (unregistered, never deleted), the profiles it created through
+  `pohunek plugin profile rm` at the digest they had when the session ended (one
+  edited since is kept and named), the session groups that still hold the value
+  onboarding set, and the hooks and skills it installed. If the window was
+  closed before the session ended, nothing after the snapshot can be told
+  apart from your own later changes, so Undo removes only manual projects
+  registered before the session ended and the `pohunek-onboard` profile at the
+  digest this tool wrote, and lists everything else as kept with its command.
+  It never removes a project, profile, group, hooks or skill the snapshot shows
+  from before the run; a skill counts by where it lives, so a Codex home the
+  run created does not make the skill every Codex home shares its own. Core cannot remove hooks without the Pohunek agent skill of the same
+  home (for Codex, the skill every Codex home shares), so hooks whose removal
+  would take a skill that onboarding did not add are kept and named. It
+  refuses while the onboard session runs, and a retry after a failed step does
+  not repeat the steps that worked. If the window never saw the onboard session
+  running, it records nothing and Undo works as if it was closed early.
 
 ## Troubleshooting
 

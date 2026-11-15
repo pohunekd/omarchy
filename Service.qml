@@ -59,10 +59,11 @@ Item {
   property var layout: ({ view: "groups", collapsed: {}, groups: [], recentProjects: [], onboardingDismissed: false })
 
   // ---- Get started card ----
-  // tools/onboard writes the record; the widget reads only whether it names
-  // the session it started (a failed launch leaves the card at ready).
+  // tools/onboard writes the record; the widget reads only whether it names a
+  // session it started and has not undone (a failed launch or a completed Undo
+  // leaves the card at ready).
   readonly property string onboardingRecordPath: Quickshell.env("HOME") + "/.local/state/omarchy/pohunek-onboarding.json"
-  property bool onboardingRecordPresent: false
+  property bool onboardingRecordPresent: false   // a launched run, not undone: the card's done and Help's Undo
   property bool onboardingAgain: false   // Help → Run onboarding again, until the next start
   property var onboardAgents: []         // Model.onboardAgents of `host inspect local --json`
   readonly property var onboarding: Model.onboardingCard({
@@ -103,13 +104,15 @@ Item {
   // one its own installers use). Only these names, and only arguments that
   // pass toolArgsValid, ever reach the command line.
   readonly property var tools: ["install-pohunek", "setup-network", "distribute", "add-shortcuts", "doctor", "onboard"]
-  // onboard takes --launch-only, --agent <name> and --command <path>; the
-  // others at most one validated SSH target. No accepted value holds a quote
-  // or a space, so single quotes keep each one a single word.
+  // onboard takes --launch-only, --undo, --mode automatic|guided, --agent
+  // <name> and --command <path>; the others at most one validated SSH target.
+  // No accepted value holds a quote or a space, so single quotes keep each one
+  // a single word.
   function toolArgsValid(name, args) {
     if (name !== "onboard") return args.length === 0 || (args.length === 1 && validSshTarget(args[0]))
     for (var i = 0; i < args.length; i++) {
-      if (args[i] === "--launch-only") continue
+      if (args[i] === "--launch-only" || args[i] === "--undo") continue
+      if (args[i] === "--mode" && i + 1 < args.length && (args[i + 1] === "automatic" || args[i + 1] === "guided")) { i++; continue }
       if (args[i] === "--agent" && i + 1 < args.length && Model.validSessionId(args[i + 1])) { i++; continue }
       if (args[i] === "--command" && i + 1 < args.length && validCommandPath(args[i + 1])) { i++; continue }
       return false
@@ -130,12 +133,20 @@ Item {
   }
 
   // The card runs nothing by itself: it opens tools/onboard, which shows
-  // every change and asks before it writes.
-  function startOnboarding(launchOnly, agent) {
+  // every change and asks before it writes. Without a mode the tool asks.
+  function startOnboarding(launchOnly, agent, mode) {
     var args = launchOnly ? ["--launch-only"] : []
+    if (mode === "automatic" || mode === "guided") args.push("--mode", mode)
     if (agent) args.push("--agent", agent)
     if (root.command !== "pohunek") args.push("--command", root.command)
     onboardingAgain = false
+    runTool("onboard", args)
+  }
+  // Help → Undo onboarding: tools/onboard --undo lists what the run added and
+  // asks once before it removes anything.
+  function undoOnboarding() {
+    var args = ["--undo"]
+    if (root.command !== "pohunek") args.push("--command", root.command)
     runTool("onboard", args)
   }
   function dismissOnboarding() { saveLayout(Object.assign({}, layout, { onboardingDismissed: true })) }
