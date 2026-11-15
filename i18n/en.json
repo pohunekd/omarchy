@@ -195,6 +195,6 @@
  "onboard.modeGuided": "Guided",
  "onboard.modeAutomatic": "Automatic",
  "onboard.modeGuidedText": "It is told to propose one change at a time and ask you first.",
- "onboard.modeAutomaticText": "It applies the items you grant in the terminal without asking, under a profile that allows only those (pohunek 0.43.0, Claude or Codex), and reports the rest.",
+ "onboard.modeAutomaticText": "It applies the items you grant in the terminal without asking, under a profile that allows only those plus what your own agent settings already allow (pohunek 0.43.0, Claude or Codex), and reports the rest.",
  "msg.toolRefused": "%1 did not start: the plugin folder, the command setting or an argument holds characters a terminal command cannot carry"
 }

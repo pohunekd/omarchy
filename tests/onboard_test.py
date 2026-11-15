@@ -284,7 +284,7 @@ exit 3
         self.assertIn("never pass --host and never a <host>/<session-id> target", request)
 
     def test_only_ticked_homes_get_hooks(self):
-        code, out = self.run_tty(self.demo(), ["y", "n", "n", "y", "n", "y", "n", "y"])
+        code, out = self.run_tty(["--no-wait", *self.demo()], ["y", "n", "n", "y", "n", "y", "n", "y"])
         self.assertEqual(code, 0, out)
         setup = self.find(["setup", "--yes"])[0]
         self.assertEqual(setup[setup.index("--hooks") + 1], "claude,codex")
@@ -448,7 +448,7 @@ exit 3
     def test_launch_only_skips_setup_and_asks_for_history(self):
         shutil.rmtree(self.fixtures)
         self.fixtures.mkdir()
-        code, out = self.run_tty(["--launch-only", "--agent", "claude", *self.demo()], ["y", "n", "y"],
+        code, out = self.run_tty(["--launch-only", "--no-wait", "--agent", "claude", *self.demo()], ["y", "n", "y"],
                                  {"DEMO_POHUNEK_ASSISTANT": "present"})
         self.assertEqual(code, 0, out)
         self.assertEqual(self.find(["setup"]), [])
@@ -520,11 +520,35 @@ exit 3
         }
 
     def end_onboard_session(self):
+        """The onboard session ends: `state` stopped and `ended_at` set, as the
+        daemon does (crates/daemon/src/session/mod.rs:1893). Written atomically,
+        because a waiting tools/onboard reads the file meanwhile."""
         path = self.state / "sessions.json"
         rows = json.loads(path.read_text())
+        t = time.time()
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + f".{int((t % 1) * 1e9):09d}Z"
         for row in rows:
-            row["state"], row["activity"] = "stopped", None
-        path.write_text(json.dumps(rows))
+            row["state"], row["activity"], row["ended_at"] = "stopped", None, stamp
+        tmp = path.with_suffix(".test.tmp")
+        tmp.write_text(json.dumps(rows))
+        os.replace(tmp, path)
+
+    def run_waiting(self, args, extra=None, during=lambda: None):
+        """Runs the tool with --wait; once it watches the session, runs `during`
+        (the onboard agent at work), then ends the session and collects the tool."""
+        proc = subprocess.Popen([str(ONBOARD), *args, "--wait"], env=self.env(extra), stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        deadline = time.monotonic() + 60
+        while not any(a[:2] == ["session", "list"] and "--meta-eq" in a for a in self.argvs()):
+            if proc.poll() is not None or time.monotonic() > deadline:
+                proc.kill()
+                out, err = proc.communicate()
+                self.fail(f"the tool did not start watching the session: {out}{err}")
+            time.sleep(0.1)
+        during()
+        self.end_onboard_session()
+        out, err = proc.communicate(timeout=60)
+        return proc.returncode, out, err
 
     def auto_env(self, **more):
         return {"DEMO_POHUNEK_VERSION": "0.43.0", "DEMO_POHUNEK_ASSISTANT": "present", **more}
@@ -544,10 +568,27 @@ exit 3
     def test_run_then_undo_restores_the_exact_pre_run_lists(self):
         auto = self.auto_env()
         before = self.lists(auto)
-        r = self.run_tool(["--yes", "--mode", "automatic", "--grant", "projects,groups,profiles,profile-hooks",
-                           "--hooks", "claude,codex", "--skill", "claude", *self.demo()], auto)
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+        def agent_at_work():
+            # A project, a group, a profile with hooks, a CLI update.
+            self.pohunek("project", "add", "/home/dev/code/new-repo", "--name", "new-repo", "--json", extra=auto)
+            self.pohunek("session", "metadata", "s-01JDEMO00000000000000000A1", "--set", "companion.group=Reviews", "--json", extra=auto)
+            code, made = self.pohunek("plugin", "profile", "create", "side", "--base", "claude", "--home", "/home/dev/.claude-side",
+                                      "--json", extra=auto)
+            self.assertEqual(code, 0, made)
+            self.pohunek("integration", "install", "--agent", "claude", "--profile", "side", "--json", extra=auto)
+            (self.state / "cli-versions.json").write_text(json.dumps({"claude": "2.2.0"}))
+            r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+            self.assertEqual(r.returncode, 1, "the onboard session still runs")
+            self.assertIn("is still running", r.stderr)
+            self.assertEqual([a for a in self.writes() if a[:2] == ["project", "rm"] or a[:3] == ["plugin", "profile", "rm"]], [])
+
+        code, out, err = self.run_waiting(["--yes", "--mode", "automatic", "--grant", "projects,groups,profiles,profile-hooks",
+                                           "--hooks", "claude,codex", "--skill", "claude", *self.demo()], auto, agent_at_work)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("what the run changed is recorded", out)
         rec = self.read_record()
+        self.assertEqual(rec["diff"]["bound"], "session_end")
         self.assertEqual((rec["mode"], rec["grant"]), ("automatic", ["projects", "groups", "profiles", "profile-hooks"]))
         self.assertEqual(rec["profile"]["name"], ONBOARD_PROFILE)
         self.assertEqual(rec["profile"]["replaced"], None)
@@ -557,26 +598,22 @@ exit 3
         self.assertEqual(launch[launch.index("--agent") + 1], ONBOARD_PROFILE)
         self.assertIn("automatic mode", (self.state / "request.txt").read_text())
 
-        # The onboard agent at work: a project, a group, a profile with hooks, a CLI update.
-        self.pohunek("project", "add", "/home/dev/code/new-repo", "--name", "new-repo", "--json", extra=auto)
-        self.pohunek("session", "metadata", "s-01JDEMO00000000000000000A1", "--set", "companion.group=Reviews", "--json", extra=auto)
-        code, made = self.pohunek("plugin", "profile", "create", "side", "--base", "claude", "--home", "/home/dev/.claude-side",
-                                  "--json", extra=auto)
-        self.assertEqual(code, 0, made)
-        self.pohunek("integration", "install", "--agent", "claude", "--profile", "side", "--json", extra=auto)
-        (self.state / "cli-versions.json").write_text(json.dumps({"claude": "2.2.0"}))
+        # The user's own changes after the session ended are not the run's.
+        self.pohunek("project", "add", "/home/dev/code/later", "--name", "later", "--json", extra=auto)
+        self.pohunek("plugin", "profile", "create", "mine", "--base", "claude", "--home", "/home/dev/.claude-mine", "--json", extra=auto)
+        later = self.lists(auto)
 
-        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
-        self.assertEqual(r.returncode, 1, "the onboard session still runs")
-        self.assertIn("is still running", r.stderr)
-        self.assertEqual([a for a in self.writes() if a[:2] == ["project", "rm"] or a[:3] == ["plugin", "profile", "rm"]], [])
-
-        self.end_onboard_session()
         self.log.unlink()
         r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         after = self.lists(auto)
-        self.assertEqual(after, before, "projects, profiles, groups, hooks and skills are back to the pre-run state")
+        self.assertEqual(after["groups"], before["groups"])
+        self.assertEqual([h for h in after["homes"] if '"mine"' not in h[1]], before["homes"],
+                         "hooks and skills are back; only the home of the user's own later profile is new")
+        self.assertEqual(after["projects"], sorted(before["projects"] + ["p-" + hashlib.sha256(b"/home/dev/code/later").hexdigest()[:8]]),
+                         "the run's project is gone; the one added after the session ended stays")
+        self.assertEqual(after["profiles"], sorted(before["profiles"] + [p for p in later["profiles"] if p[0] == "mine"]),
+                         "the run's profiles are gone; the one created after the session ended stays")
         writes = [a for a in self.writes() if a[:1] != ["--version"]]
         self.assertEqual([a[:3] for a in writes], [
             ["project", "rm", "p-" + hashlib.sha256(b"/home/dev/code/new-repo").hexdigest()[:8]],
@@ -590,6 +627,7 @@ exit 3
         self.assertEqual(writes[5:], [["integration", "uninstall", "--agent", "claude", "--json"],
                                       ["integration", "uninstall", "--agent", "codex", "--json"]],
                          "hooks setup installed and the skill of claude, after the profiles")
+        self.assertIn("hooks and agent skill in claude", r.stdout, "the skill the removal takes is named")
         self.assertIn("not reverted: claude was updated from 2.1.3 to 2.2.0", r.stdout)
         self.assertNotIn(["plugin", "uninstall"], [a[:2] for a in writes], "--yes never removes the assistant package")
         self.assertNotIn(["service", "uninstall"], [a[:2] for a in writes], "--yes never uninstalls the service")
@@ -598,20 +636,21 @@ exit 3
         self.assertTrue(rec["undone_at"])
         self.assertEqual(rec["undo"]["failed"], [])
         self.assertEqual(rec["diff"]["agent_versions"], [{"agent": "claude", "before": "2.1.3", "after": "2.2.0"}])
+        self.assertNotIn("later", json.dumps(rec["diff"]))
         r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
         self.assertEqual(r.returncode, 0)
         self.assertIn("nothing is left to undo", r.stdout)
 
     def test_an_edited_profile_is_kept_and_named(self):
         auto = self.auto_env()
-        r = self.run_tool(["--yes", "--mode", "automatic", "--grant", "profiles", *self.demo()], auto)
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        _, made = self.pohunek("plugin", "profile", "create", "side", "--base", "claude", "--home", "/home/dev/.claude-side",
-                               "--json", extra=auto)
-        self.end_onboard_session()
-        # The next start of the tool records the diff of the ended run; this one stops at the question.
-        code, out = self.run_tty(["--undo", *self.demo()], ["n"], auto)
-        self.assertEqual(code, 1, out)
+        made = {}
+
+        def agent_at_work():
+            made.update(self.pohunek("plugin", "profile", "create", "side", "--base", "claude", "--home", "/home/dev/.claude-side",
+                                     "--json", extra=auto)[1])
+
+        code, out, err = self.run_waiting(["--yes", "--mode", "automatic", "--grant", "profiles", *self.demo()], auto, agent_at_work)
+        self.assertEqual(code, 0, out + err)
         diff = self.read_record()["diff"]
         self.assertEqual([p["name"] for p in diff["profiles_created"]], [ONBOARD_PROFILE, "side"])
         _, edited = self.pohunek("plugin", "profile", "create", "side", "--base", "claude", "--home", "/home/dev/.claude-side",
@@ -732,7 +771,7 @@ exit 3
 
     def test_the_grant_screen_turns_items_off(self):
         # history n, mode automatic, grant: projects y, groups n, profiles Enter (on), profile-hooks n, cli-update n, start y
-        code, out = self.run_tty(["--launch-only", "--agent", "claude", *self.demo()], ["n", "y", "y", "n", "", "n", "n", "y"],
+        code, out = self.run_tty(["--launch-only", "--no-wait", "--agent", "claude", *self.demo()], ["n", "y", "y", "n", "", "n", "n", "y"],
                                  self.auto_env())
         self.assertEqual(code, 0, out)
         self.assertIn("applies the items you grant without asking", out)
@@ -741,7 +780,7 @@ exit 3
 
     def test_the_skill_is_offered_per_home_only_with_skill_support(self):
         # claude y, its skill y, claude:work n, codex n, history n, mode guided, apply y
-        code, out = self.run_tty(self.demo(), ["y", "y", "n", "n", "n", "n", "y"], {"DEMO_POHUNEK_ASSISTANT": "present"})
+        code, out = self.run_tty(["--no-wait", *self.demo()], ["y", "y", "n", "n", "n", "n", "y"], {"DEMO_POHUNEK_ASSISTANT": "present"})
         self.assertEqual(code, 0, out)
         self.assertEqual(self.find(["integration", "install"]),
                          [["integration", "install", "--agent", "claude", "--skill", "--json"]])
@@ -751,7 +790,7 @@ exit 3
         self.assertEqual(self.read_record()["skills"], [{"home": "claude", "state": "created"}])
         self.log.unlink()
         shutil.rmtree(self.state)
-        code, out = self.run_tty(self.demo(), ["y", "n", "n", "n", "n", "y"],
+        code, out = self.run_tty(["--no-wait", *self.demo()], ["y", "n", "n", "n", "n", "y"],
                                  {"DEMO_POHUNEK_ASSISTANT": "present", "DEMO_POHUNEK_NO_SKILL": "1"})
         self.assertEqual(code, 0, out)
         self.assertNotIn("agent skill, so", out)
@@ -781,6 +820,111 @@ exit 3
         self.assertEqual(argvs[create][5], "codex", "no agent picked: the assistant's order")
         rec = self.read_record()
         self.assertEqual((rec["mode"], rec["grant"], rec["snapshot"]["taken"]), ("automatic", ["projects"], "after_setup"))
+
+    def test_without_a_recorded_end_undo_removes_only_what_it_can_prove(self):
+        """The reviewer's case: the window was closed before the session ended,
+        and the user added things later; Undo must not take them."""
+        auto = self.auto_env()
+        r = self.run_tool(["--yes", "--mode", "automatic", "--grant", "projects,groups,profiles", "--hooks", "claude",
+                           *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.pohunek("project", "add", "/home/dev/code/new-repo", "--name", "new-repo", "--json", extra=auto)
+        self.pohunek("session", "metadata", "s-01JDEMO00000000000000000A1", "--set", "companion.group=Reviews", "--json", extra=auto)
+        self.pohunek("plugin", "profile", "create", "side", "--base", "claude", "--home", "/home/dev/.claude-side", "--json", extra=auto)
+        self.end_onboard_session()
+        time.sleep(0.05)
+        self.pohunek("project", "add", "/home/dev/code/later", "--name", "later", "--json", extra=auto)
+        self.pohunek("plugin", "profile", "create", "mine", "--base", "claude", "--home", "/home/dev/.claude-mine", "--json", extra=auto)
+        code, out = self.run_tty(["--undo", *self.demo()], ["n"], auto)
+        self.assertEqual(code, 1, out)
+        self.assertIsNone(self.read_record().get("diff"), "a diff read after the fact is never written")
+        self.log.unlink()
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("was not recorded when its session ended", r.stdout)
+        removed = [a for a in self.writes() if a[:2] == ["project", "rm"] or a[:3] in (["plugin", "profile", "rm"],
+                   ["session", "metadata", "s-01JDEMO00000000000000000A1"]) or a[:2] == ["integration", "uninstall"]]
+        self.assertEqual([a[:4] for a in removed], [
+            ["project", "rm", "p-" + hashlib.sha256(b"/home/dev/code/new-repo").hexdigest()[:8], "--json"],
+            ["plugin", "profile", "rm", ONBOARD_PROFILE]], "only the provable items: a manual project from before the end, the tool's own profile")
+        for name in ("later", "mine", "side"):
+            self.assertIn(f" {name}" if name != "later" else "p-" + hashlib.sha256(b"/home/dev/code/later").hexdigest()[:8],
+                          r.stdout)
+        self.assertIn("kept: profile mine: cannot prove onboarding added it", r.stdout)
+        self.assertIn("kept: profile side: cannot prove onboarding added it", r.stdout)
+        self.assertIn("kept: group Reviews of session s-01JDEMO00000000000000000A1: cannot prove", r.stdout)
+        self.assertIn("kept: hooks in claude: cannot prove", r.stdout)
+        names = [p["name"] for p in self.pohunek("plugin", "profile", "list", "--all", "--json", extra=auto)[1]["ok"]["profiles"]]
+        self.assertEqual(sorted(names), ["mine", "side", "work"])
+
+    def test_hooks_are_kept_when_their_removal_would_take_a_skill_from_before(self):
+        auto = self.auto_env()
+        self.pohunek("plugin", "profile", "create", "cwork", "--base", "codex", "--home", "/home/dev/.codex-work", "--json", extra=auto)
+        self.pohunek("integration", "install", "--agent", "codex", "--profile", "cwork", "--skill", "--json", extra=auto)
+        code, out, err = self.run_waiting(["--yes", "--hooks", "codex", *self.demo()], auto)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([i for i in self.read_record()["diff"]["integrations"]],
+                         [{"agent": "codex", "profile": None, "hooks": True, "skill": False}])
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.find(["integration", "uninstall"]), [], "no bare Codex uninstall: it would take the shared skill")
+        self.assertIn("kept: hooks in codex: removing them also removes the pohunek agent skill there, which onboarding did not add",
+                      r.stdout)
+        status = self.pohunek("integration", "status", "--all-profiles", "--json", extra=auto)[1]["ok"]["agents"]
+        cwork = next(a for a in status if a.get("home", {}).get("selector", {}).get("name") == "cwork")
+        self.assertEqual((cwork["state"], cwork["skill"]["state"]), ("current", "current"), "the user's skill stays")
+
+    def test_a_retry_after_a_failed_step_does_not_repeat_the_steps_that_worked(self):
+        auto = self.auto_env()
+
+        def agent_at_work():
+            self.pohunek("project", "add", "/home/dev/code/new-repo", "--name", "new-repo", "--json", extra=auto)
+
+        code, out, err = self.run_waiting(["--yes", "--hooks", "claude", *self.demo()], auto, agent_at_work)
+        self.assertEqual(code, 0, out + err)
+        r = self.run_tool(["--undo", "--yes", *self.demo()], {**auto, "DEMO_POHUNEK_FAIL_PROJECT_RM": "1"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("the steps that worked are recorded and not repeated", r.stderr)
+        self.assertEqual(len(self.find(["integration", "uninstall"])), 1)
+        self.assertIsNone(self.read_record().get("undone_at"))
+        self.pohunek("integration", "install", "--agent", "claude", "--json", extra=auto)  # the user reinstalls them
+        self.log.unlink()
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.find(["integration", "uninstall"]), [], "the user's reinstall is left alone")
+        self.assertEqual(len(self.find(["project", "rm"])), 1)
+        self.assertIn("done in an earlier Undo attempt: hooks in claude", r.stdout)
+        self.assertTrue(self.read_record()["undone_at"])
+
+    def test_a_replaced_onboard_profile_is_named(self):
+        auto = self.auto_env()
+        _, old = self.pohunek("plugin", "profile", "create", ONBOARD_PROFILE, "--base", "claude", "--json", extra=auto)
+        code, out, err = self.run_waiting(["--yes", "--mode", "automatic", "--grant", "none", "--agent", "claude", *self.demo()], auto)
+        self.assertEqual(code, 0, out + err)
+        rec = self.read_record()
+        self.assertEqual(rec["profile"]["replaced"], old["ok"]["file_digest"])
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.find(["plugin", "profile", "rm"]), [])
+        self.assertIn(f"kept: profile {ONBOARD_PROFILE}: this run replaced an earlier version ({old['ok']['file_digest']})", r.stdout)
+
+    def test_undo_refuses_what_the_snapshot_shows_from_before(self):
+        auto = self.auto_env()
+        code, out, err = self.run_waiting(["--yes", *self.demo()], auto)
+        self.assertEqual(code, 0, out + err)
+        rec = self.read_record()
+        work = next(p for p in rec["snapshot"]["profiles"] if p["name"] == "work")
+        first = rec["snapshot"]["projects"][0]
+        rec["diff"]["profiles_created"] = [work]
+        rec["diff"]["projects_added"] = [first]
+        rec["diff"]["groups_set"] = [{"session_id": "s-01JDEMO00000000000000000A2", "group": "Dependencies"}]
+        self.record.write_text(json.dumps(rec))
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([a for a in self.writes() if a[:2] in (["project", "rm"], ["session", "metadata"]) or a[:3] == ["plugin", "profile", "rm"]], [])
+        self.assertIn("refused: profile work: it existed before the run", r.stdout)
+        self.assertIn(f"refused: project {first}: it was registered before the run", r.stdout)
+        self.assertIn("refused: group of session s-01JDEMO00000000000000000A2: the session was not ungrouped before the run", r.stdout)
 
     def test_undo_passes_only_well_formed_record_values(self):
         r = self.run_tool(["--launch-only", "--yes", *self.demo()], self.auto_env())

@@ -203,6 +203,6 @@
  "onboard.modeGuided": "S dotazy",
  "onboard.modeAutomatic": "Automaticky",
  "onboard.modeGuidedText": "Má pokyn navrhovat jednu změnu po druhé a nejdřív se zeptat.",
- "onboard.modeAutomaticText": "Bez ptaní provede položky, které povolíš v terminálu, pod profilem, který dovolí jen je (pohunek 0.43.0, Claude nebo Codex), a zbytek nahlásí.",
+ "onboard.modeAutomaticText": "Bez ptaní provede položky, které povolíš v terminálu, pod profilem, který dovolí jen je a to, co už dovolí tvoje vlastní nastavení agenta (pohunek 0.43.0, Claude nebo Codex), a zbytek nahlásí.",
  "msg.toolRefused": "%1 se nespustil: složka pluginu, nastavení command nebo argument obsahuje znaky, které příkaz v terminálu nepřenese"
 }

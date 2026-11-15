@@ -34,6 +34,7 @@ used by tests/onboard_test.py:
                           daemon without the skill install)
   DEMO_POHUNEK_PROFILE_CHANGED  name of a profile whose file changes between
                           `plugin profile list` and `create --replace`
+  DEMO_POHUNEK_FAIL_PROJECT_RM  1: `project rm` fails
 """
 import hashlib, json, os, re, shutil, sys, time
 
@@ -86,6 +87,13 @@ def ago(seconds):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - seconds))
 
 
+def rfc3339(seconds_ago=0.0):
+    """The daemon's timestamps: RFC3339 UTC with nanoseconds, as the `time` crate
+    formats them (crates/daemon/src/time.rs:12-16)."""
+    t = time.time() - seconds_ago
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + f".{int((t % 1) * 1e9):09d}Z"
+
+
 def env(ok):
     print(json.dumps({"cli_version": VERSION, "protocol": PROTOCOL, "ok": ok}))
 
@@ -120,11 +128,14 @@ def load(name, default):
 
 
 def save(name, value):
+    """Atomic, so a reader running at the same time never sees half a file."""
     if not STATE:
         return
     os.makedirs(STATE, exist_ok=True)
-    with open(state_path(name), "w", encoding="utf-8") as handle:
+    tmp = state_path(name) + f".{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(value, handle)
+    os.replace(tmp, state_path(name))
 
 
 def session(sid, name, agent, activity, project, group=None, link=None, branch="", updated=60, subagents=0,
@@ -435,9 +446,11 @@ def runtime_package(base):
 
 
 def project_rows():
+    """ProjectInfo, crates/protocol/src/project.rs:57-85 (source :20-33)."""
     rows = load("projects.json", None)
     if rows is None:
-        rows = [{"id": f"p-{i:08x}", "label": p, "last_used_at": ago(i * 3600)} for i, p in enumerate(PROJECTS)]
+        rows = [{"id": f"p-{i:08x}", "label": p, "source": "auto" if i % 4 == 3 else "manual",
+                 "added_at": rfc3339(86400 * (30 + i)), "last_used_at": ago(i * 3600)} for i, p in enumerate(PROJECTS)]
     return rows
 
 
@@ -713,12 +726,14 @@ def cmd_project(verb, flags):
         check_flags(flags[1:], {"--json"}, {"--name", "--base-branch"})
         path = flags[0] if flags else ""
         entry = {"id": "p-" + hashlib.sha256(path.encode()).hexdigest()[:8], "label": option(flags, "--name") or os.path.basename(path),
-                 "last_used_at": ago(0)}
+                 "source": "manual", "added_at": rfc3339(), "last_used_at": ago(0)}
         save("projects.json", [r for r in rows if r["id"] != entry["id"]] + [entry])
         env(entry)
         return
     check_flags(flags[1:], {"--json", "--prune-worktrees"}, set())
     ref = flags[0] if flags else ""
+    if os.environ.get("DEMO_POHUNEK_FAIL_PROJECT_RM") == "1":
+        fail("project_remove_failed", f"project {ref} could not be removed", cls="runtime")
     kept = [r for r in rows if r["id"] != ref]
     save("projects.json", kept)
     # ProjectRemoveResult, crates/protocol/src/project.rs:377-387.
