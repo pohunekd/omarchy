@@ -39,6 +39,8 @@ used by tests/onboard_test.py:
                           no session (the listing does not show the run's session)
   DEMO_POHUNEK_ATTACH_ENDS  1: `attach` returns once the onboard session ended
                           (the user stayed attached until the agent exited)
+  DEMO_POHUNEK_LAUNCH_FAILED  1: `assistant setup` starts the session already
+                          `failed`, with `ended_at` set
 """
 import hashlib, json, os, re, shutil, sys, time
 
@@ -421,6 +423,9 @@ def cmd_assistant(intent, flags):
             meta[key] = value
     sid = "s-01JDEMOONBOARD" + hashlib.sha256(json.dumps(meta, sort_keys=True).encode()).hexdigest()[:12].upper()
     info = session(sid, "pohunek-assistant", agent, "working", "pohunek", updated=5, created=5, extra_meta=meta)
+    if os.environ.get("DEMO_POHUNEK_LAUNCH_FAILED") == "1":
+        # SessionState::Failed, crates/protocol/src/session.rs:2753; ended_at :3422-3429.
+        info.update({"state": "failed", "activity": None, "ended_at": rfc3339()})
     if STATE:
         save("sessions.json", load("sessions.json", []) + [info])
         save("request.txt", request)

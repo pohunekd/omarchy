@@ -1057,6 +1057,14 @@ exit 3
         self.assertIn("what the run changed is recorded for Undo onboarding", r.stdout)
         self.assertEqual(self.read_record()["diff"]["bound"], "session_end")
 
+    def test_a_session_already_ended_and_never_seen_live_binds_no_diff(self):
+        auto = self.auto_env(DEMO_POHUNEK_LAUNCH_FAILED="1")
+        r = self.run_tool(["--yes", "--wait", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("The onboard session ended before this window saw it running, so what the run changed is not recorded",
+                      r.stdout)
+        self.assertIsNone(self.read_record().get("diff"))
+
     def test_the_undo_plan_drops_malformed_record_values(self):
         """The plan's own validation is the only guard here: every malformed
         value also appears in pohunek's current answers, beside a well-formed one."""
