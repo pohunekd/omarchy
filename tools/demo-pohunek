@@ -35,6 +35,10 @@ used by tests/onboard_test.py:
   DEMO_POHUNEK_PROFILE_CHANGED  name of a profile whose file changes between
                           `plugin profile list` and `create --replace`
   DEMO_POHUNEK_FAIL_PROJECT_RM  1: `project rm` fails
+  DEMO_POHUNEK_UNLISTED_RUN  1: `session list --meta-eq onboard.run=...` lists
+                          no session (the listing does not show the run's session)
+  DEMO_POHUNEK_ATTACH_ENDS  1: `attach` returns once the onboard session ended
+                          (the user stayed attached until the agent exited)
 """
 import hashlib, json, os, re, shutil, sys, time
 
@@ -713,6 +717,8 @@ def session_filter(flags):
         if f == "--meta-eq":
             key, _, want = value.partition("=")
             rows = [r for r in rows if r["metadata"].get(key) == want]
+            if key == "onboard.run" and os.environ.get("DEMO_POHUNEK_UNLISTED_RUN") == "1":
+                rows = []
         elif f == "--meta-has":
             rows = [r for r in rows if value in r["metadata"]]
         elif f == "--filter" and value.startswith("state="):
@@ -806,6 +812,12 @@ def main():
         return
     if args[:1] == ["attach"]:
         print("demo-pohunek: attach " + " ".join(args[1:]) + " (demo mode: no terminal)")
+        if os.environ.get("DEMO_POHUNEK_ATTACH_ENDS") == "1" and STATE:
+            rows = load("sessions.json", [])
+            for row in rows:
+                if row["id"] in args[1:]:
+                    row["state"], row["activity"], row["ended_at"] = "stopped", None, rfc3339()
+            save("sessions.json", rows)
         return
 
     cmd = [a for a in args if a not in ("--json", "--unread", "--refresh", "-q")]

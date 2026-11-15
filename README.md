@@ -294,12 +294,14 @@ IPC for your own bindings: `omarchy-shell pohunek.sessions toggle | newSession |
   apart from your own later changes, so Undo removes only manual projects
   registered before the session ended and the `pohunek-onboard` profile at the
   digest this tool wrote, and lists everything else as kept with its command.
-  It never removes a project, profile or group the snapshot shows from before
-  the run. Core cannot remove hooks without the Pohunek agent skill of the same
+  It never removes a project, profile, group, hooks or skill the snapshot shows
+  from before the run; a skill counts by where it lives, so a Codex home the
+  run created does not make the skill every Codex home shares its own. Core cannot remove hooks without the Pohunek agent skill of the same
   home (for Codex, the skill every Codex home shares), so hooks whose removal
   would take a skill that onboarding did not add are kept and named. It
   refuses while the onboard session runs, and a retry after a failed step does
-  not repeat the steps that worked.
+  not repeat the steps that worked. If the window never saw the onboard session
+  running, it records nothing and Undo works as if it was closed early.
 
 ## Troubleshooting
 

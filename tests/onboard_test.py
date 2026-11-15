@@ -984,5 +984,111 @@ exit 3
                          "a record without session groups clears none")
 
 
+    def codex_status(self, auto):
+        status = self.pohunek("integration", "status", "--all-profiles", "--json", extra=auto)[1]["ok"]["agents"]
+        return {a["home"]["selector"].get("name"): (a["state"], a["skill"]["state"]) for a in status if a["agent"] == "codex"}
+
+    def test_a_new_codex_home_does_not_claim_the_shared_skill(self):
+        auto = self.auto_env()
+        self.pohunek("integration", "install", "--agent", "codex", "--skill", "--json", extra=auto)
+
+        def agent_at_work():
+            self.pohunek("plugin", "profile", "create", "cside", "--base", "codex", "--home", "/home/dev/.codex-side",
+                         "--json", extra=auto)
+
+        code, out, err = self.run_waiting(["--yes", *self.demo()], auto, agent_at_work)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.read_record()["diff"]["integrations"], [], "the shared skill predates the run")
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.find(["integration", "uninstall"]), [])
+        self.assertEqual([a[:4] for a in self.find(["plugin", "profile", "rm"])], [["plugin", "profile", "rm", "cside"]])
+        self.assertEqual(self.codex_status(auto)[None], ("current", "current"), "the user's hooks and shared skill stay")
+
+    def test_codex_hooks_of_the_run_keep_a_shared_skill_from_before(self):
+        auto = self.auto_env()
+        self.pohunek("plugin", "profile", "create", "cwork", "--base", "codex", "--home", "/home/dev/.codex-work", "--json", extra=auto)
+        self.pohunek("integration", "install", "--agent", "codex", "--profile", "cwork", "--skill", "--json", extra=auto)
+
+        def agent_at_work():
+            self.pohunek("plugin", "profile", "create", "cside", "--base", "codex", "--home", "/home/dev/.codex-side",
+                         "--json", extra=auto)
+
+        code, out, err = self.run_waiting(["--yes", "--hooks", "codex", *self.demo()], auto, agent_at_work)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.read_record()["diff"]["integrations"], [{"agent": "codex", "profile": None, "hooks": True, "skill": False}])
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.find(["integration", "uninstall"]), [], "no bare Codex uninstall: it would take the shared skill")
+        self.assertIn("kept: hooks in codex: removing them also removes the pohunek agent skill there", r.stdout)
+        self.assertEqual(self.codex_status(auto)["cwork"], ("current", "current"))
+
+    def test_undo_refuses_hooks_and_skills_the_snapshot_shows_from_before(self):
+        auto = self.auto_env()
+        self.pohunek("integration", "install", "--agent", "claude", "--json", extra=auto)
+        self.assertEqual(self.pohunek("integration", "install", "--agent", "codex", "--skill", "--json", extra=auto)[0], 0)
+        code, out, err = self.run_waiting(["--yes", *self.demo()], auto)
+        self.assertEqual(code, 0, out + err)
+        rec = self.read_record()
+        self.assertEqual(rec["diff"]["bound"], "session_end")
+        rec["diff"]["integrations"] = [{"agent": "claude", "profile": None, "hooks": True, "skill": False},
+                                       {"agent": "codex", "profile": None, "hooks": False, "skill": True}]
+        self.record.write_text(json.dumps(rec))
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.find(["integration", "uninstall"]), [])
+        self.assertIn("refused: hooks in claude: they were installed before the run", r.stdout)
+        self.assertIn("refused: agent skill of Codex: it was installed before the run", r.stdout)
+
+    def test_a_session_never_seen_running_binds_no_diff(self):
+        auto = self.auto_env(DEMO_POHUNEK_UNLISTED_RUN="1")
+        code, out, err = self.run_waiting(["--yes", *self.demo()], auto)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("pohunek does not list the onboard session, so what the run changed is not recorded", out)
+        self.assertIsNone(self.read_record().get("diff"))
+
+    def test_an_attach_that_lasts_until_the_session_ends_still_binds_the_diff(self):
+        """Without omarchy-launch-or-focus-tui the attach runs in this window, so
+        the first poll already sees the session ended; the launch reply showed
+        it running."""
+        auto = self.auto_env(DEMO_POHUNEK_ATTACH_ENDS="1")
+        r = self.run_tool(["--yes", "--wait", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("what the run changed is recorded for Undo onboarding", r.stdout)
+        self.assertEqual(self.read_record()["diff"]["bound"], "session_end")
+
+    def test_the_undo_plan_drops_malformed_record_values(self):
+        """The plan's own validation is the only guard here: every malformed
+        value also appears in pohunek's current answers, beside a well-formed one."""
+        digest = "sha256:" + "ab" * 32
+        rows = lambda *names: [{"name": n, "file_digest": d} for n, d in names]
+        home = lambda agent, sel: {"agent": agent, "state": "current", "home": {"selector": sel}, "skill": {"state": "absent"}}
+        manual = lambda pid: {"id": pid, "label": pid, "source": "manual", "added_at": "2026-01-01T00:00:00Z"}
+        plan_in = {
+            "record": {"snapshot": {"projects": [], "profiles": [], "integrations": {"agents": []},
+                                    "sessions": [{"id": "-s", "group": None}, {"id": "s-ok", "group": None}]},
+                       "profile": None},
+            "diff": {"projects_added": ["--prune-worktrees", "p-ok"],
+                     "profiles_created": rows(("-x", digest), ("../work", digest), ("ok2", "--json"), ("ok", digest)),
+                     "groups_set": [{"session_id": "-s", "group": "G"}, {"session_id": "s-ok", "group": "G"}],
+                     "integrations": [{"agent": "--all-profiles", "profile": None, "hooks": True, "skill": False},
+                                      {"agent": "claude", "profile": "-p", "hooks": True, "skill": False},
+                                      {"agent": "claude", "profile": None, "hooks": True, "skill": False}]},
+            "bound": True, "ended": None, "can_rm": True, "done": [], "rm_version": "0.43.0",
+            "now": {"projects": [manual("--prune-worktrees"), manual("p-ok")],
+                    "profiles": {"profiles": rows(("-x", digest), ("../work", digest), ("ok2", "--json"), ("ok", digest), ("-p", digest))},
+                    "sessions": [{"id": "-s", "metadata": {"companion.group": "G"}}, {"id": "s-ok", "metadata": {"companion.group": "G"}}],
+                    "integrations": {"agents": [home("--all-profiles", {"kind": "default"}),
+                                                home("claude", {"kind": "profile", "name": "-p"}),
+                                                home("claude", {"kind": "default"})]}}}
+        out = subprocess.run(["jq", "-n", "--argjson", "in", json.dumps(plan_in), "-f", str(ROOT / "tools" / "onboard-undo.jq")],
+                             capture_output=True, text=True, check=True)
+        actions = json.loads(out.stdout)["actions"]
+        self.assertEqual([a["key"] for a in actions], ["project:p-ok", "profile:ok", "group:s-ok", "hooks:claude:"],
+                         "only the well-formed items, each matched in the current answers")
+        for bad in ("--prune-worktrees", "-x", "../work", "--json", "-s", "--all-profiles", "-p"):
+            self.assertFalse(any(bad in a["argv"][:-1] for a in actions), bad)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -566,17 +566,32 @@ compute_diff() {
 }
 
 # Watches the onboard session of run $1 until it ends, then writes the run's
-# diff into the record, bound to that end. Only a watch that saw the session
-# running and then ended binds the diff; Undo trusts nothing else.
+# diff into the record, bound to that end. $2 is 1 when the launch reply showed
+# the session starting or running: an attach in this window returns only once
+# the user detaches or the session ends. Only a session seen live and then
+# listed as ended binds the diff; Undo trusts nothing else.
 watch_session_end() {
-  local run_id=$1 listed failures=0 ended record diff
+  local run_id=$1 seen_live=$2 listed failures=0 missing=0 ended record diff
   say "Waiting for the onboard session to end…"
   echo "When it ends, this window records what the run changed, so Undo onboarding can remove"
   echo "exactly that. Closing the window skips the record; Undo then removes only what it can prove."
   while :; do
     if run_cli listed session list --meta-eq "onboard.run=$run_id" --json; then
       failures=0
-      jq -e '[.ok[]? | select(.state == "running" or .state == "starting")] | length > 0' >/dev/null <<<"$listed" || break
+      if ! jq -e '[.ok[]?] | length > 0' >/dev/null <<<"$listed"; then
+        missing=$((missing + 1))
+        if (( missing >= WAIT_MAX_FAILURES )); then
+          echo "pohunek does not list the onboard session, so what the run changed is not recorded."
+          return 0
+        fi
+      elif jq -e '[.ok[]? | select(.state == "running" or .state == "starting")] | length > 0' >/dev/null <<<"$listed"; then
+        seen_live=1
+      elif (( seen_live )); then
+        break
+      else
+        echo "The onboard session ended before this window saw it running, so what the run changed is not recorded."
+        return 0
+      fi
     else
       failures=$((failures + 1))
       if (( failures >= WAIT_MAX_FAILURES )); then
@@ -625,7 +640,7 @@ ensure_assistant_works() {
 
 # Writes the record, starts the onboard session and attaches to it.
 start_session() {
-  local setup_result=$1 assistant=$2 hooks_json=$3 skills_json=$4 run_id started_at doc launch sid app_id grant_json
+  local setup_result=$1 assistant=$2 hooks_json=$3 skills_json=$4 run_id started_at doc launch sid app_id grant_json launched_live=0
   [[ -n $SNAPSHOT ]] || require_snapshot before_launch
   ensure_assistant_works
   local profile=null
@@ -663,6 +678,7 @@ start_session() {
     die "The onboard session did not start: $(cli_error "$launch")"
   fi
   sid=$(jq -r '.ok.session.id' <<<"$launch")
+  if jq -e '.ok.session.state == "running" or .ok.session.state == "starting"' >/dev/null <<<"$launch"; then launched_live=1; fi
   [[ $sid =~ $ID_RE ]] || die "pohunek returned an unexpected session id."
   write_record "$(jq --arg sid "$sid" '. + {session_id: $sid}' <<<"$doc")"
   echo "Onboard session: $sid (Ctrl+] detaches; it keeps running)."
@@ -678,7 +694,7 @@ start_session() {
     trap - EXIT
     exec "$POHUNEK" attach "$sid"
   fi
-  if [[ $WAIT == yes ]]; then watch_session_end "$run_id"; fi
+  if [[ $WAIT == yes ]]; then watch_session_end "$run_id" "$launched_live"; fi
   exit 0
 }
 

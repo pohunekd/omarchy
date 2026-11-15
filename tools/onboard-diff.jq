@@ -12,7 +12,8 @@
 #   own       the onboard session's id; its own metadata is never a change
 #
 # Output: projects_added, profiles_created, groups_set, integrations
-# ({agent, profile, hooks, skill}: what is new in that home), agent_versions
+# ({agent, profile, hooks, skill}: what is new in that home; a skill is new only
+# when no home had one at its location before the run), agent_versions
 # ({agent, before, after}) and groups_known (false when the snapshot has no
 # session list, so no group can be attributed to the run).
 
@@ -20,6 +21,11 @@ def home_key: [.agent, (.home.selector // {kind: "default"} | if .kind == "profi
 def hooks_present: (.state // "not_installed") != "not_installed";
 # Skill states that mean a skill file exists (cli.md "integration status").
 def skill_present: (.skill.state // "absent") | IN("current", "stale", "modified", "foreign", "unsafe");
+# Where a home's skill lives: Codex reads one skill every home shares
+# (~/.agents/skills, cli.md "integration install"), Claude one per config home.
+def skill_loc: if .agent == "codex" or (.skill.shared // false) then ["shared", .agent]
+               elif (.skill.path | type) == "string" then ["path", .skill.path]
+               else ["home"] + home_key end;
 
 ($snapshot.projects // []) as $p0
 | ($snapshot.profiles // []) as $pr0
@@ -41,10 +47,11 @@ def skill_present: (.skill.state // "absent") | IN("current", "stale", "modified
     end),
     integrations: [($now.integrations.agents // [])[]
       | home_key as $k
+      | skill_loc as $loc
       | ([$i0[] | select(home_key == $k)] | first) as $before
       | {agent: $k[0], profile: $k[1],
          hooks: (hooks_present and (($before // {}) | hooks_present | not)),
-         skill: (skill_present and (($before // {}) | skill_present | not))}
+         skill: (skill_present and ([$i0[] | select(skill_loc == $loc and skill_present)] | length == 0))}
       | select(.hooks or .skill)],
     agent_versions: (if $snapshot.agents == null then [] else
       ($snapshot.agents | map({key: .agent, value: .version}) | from_entries) as $v0

@@ -17,9 +17,10 @@
 # Every action has a stable key; an action in `done` is not repeated. Only an
 # item the run provably added is removed: with a late diff that is a manual
 # project registered before the session ended and the tool's own
-# pohunek-onboard at its recorded digest. Hooks are removed only when every
-# skill the removal takes with it was added by the run (core has no
-# hooks-only uninstall).
+# pohunek-onboard at its recorded digest. Anything the snapshot shows before
+# the run is refused: hooks by their home, a skill by its location (Codex
+# homes share one). Hooks are removed only when every skill the removal takes
+# with it was added by the run (core has no hooks-only uninstall).
 
 def id_ok: type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$");
 def name_ok: type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$");
@@ -33,6 +34,10 @@ def key_of($i): "\($i.agent):\($i.profile // "")";
 def status_key: [.agent, (.home.selector // {kind: "default"} | if .kind == "profile" then .name else null end)];
 def hooks_present: (.state // "not_installed") != "not_installed";
 def skill_present: (.skill.state // "absent") | IN("current", "stale", "modified", "foreign", "unsafe");
+# The location of a home's skill, as tools/onboard-diff.jq compares it.
+def skill_loc: if .agent == "codex" or (.skill.shared // false) then ["shared", .agent]
+               elif (.skill.path | type) == "string" then ["path", .skill.path]
+               else ["home"] + status_key end;
 def uninstall($i; $skill): ["integration", "uninstall", "--agent", $i.agent]
   + (if $i.profile then ["--profile", $i.profile] else [] end)
   + (if $skill then ["--skill"] else [] end) + ["--json"];
@@ -54,6 +59,21 @@ $in.record as $r | $in.diff as $d0 | $in.bound as $bound | $in.now as $now | ($i
 | ($now.sessions // []) as $sessions
 | (($now.integrations // {}).agents // []) as $status
 | ($r.profile // null) as $own
+| (($snap.integrations // {}).agents // []) as $i0
+# ---- integrations the snapshot shows before the run are refused
+| [$d.integrations[] | . as $i
+   | ([$status[] | select(status_key == [$i.agent, $i.profile])] | first) as $now_i
+   | (if $now_i != null then ($now_i | skill_loc)
+      else ({agent: $i.agent, home: {selector: (if $i.profile then {kind: "profile", name: $i.profile} else {kind: "default"} end)}} | skill_loc) end) as $loc
+   | {i: $i,
+      hooks_before: ($i.hooks and ([$i0[] | select(status_key == [$i.agent, $i.profile] and hooks_present)] | length > 0)),
+      skill_before: ($i.skill and ([$i0[] | select(skill_loc == $loc and skill_present)] | length > 0))}] as $judged
+| ([$judged[] | select(.hooks_before) | "hooks in \(home(.i)): they were installed before the run, so they are kept"]
+   + ([$judged[] | select(.skill_before)
+       | if .i.agent == "codex" then "agent skill of Codex: it was installed before the run, so it is kept"
+         else "agent skill in \(home(.i)): it was installed before the run, so it is kept" end] | unique)) as $int_refused
+| ($d | .integrations = [$judged[] | .i + {hooks: (.i.hooks and (.hooks_before | not)), skill: (.i.skill and (.skill_before | not))}
+                         | select(.hooks or .skill)]) as $d
 # ---- projects
 | [$d.projects_added[] | . as $id | ($projects | map(select(.id == $id)) | first) as $row
    | if IN($p0[]) then {refused: "project \($id): it was registered before the run, so it is kept"}
@@ -140,6 +160,6 @@ $in.record as $r | $in.diff as $d0 | $in.bound as $bound | $in.now as $now | ($i
     kept: ([$proj[], $profs[], $hooks[], $skills[], $groups[] | .kept? // empty] + $replaced
            + [$d.integrations[] | select(.profile != null and (.profile as $n | $names | index($n) | not))
               | "hooks in \(home(.)): the profile is gone, so pohunek cannot reach its home; remove them by hand"]),
-    refused: [$proj[], $profs[], $groups[] | .refused? // empty],
+    refused: [$proj[], $profs[], $groups[] | .refused? // empty] + $int_refused,
     gone: [$proj[], $profs[], $hooks[], $skills[], $groups[] | .gone? // empty]
   }
