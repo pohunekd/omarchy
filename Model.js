@@ -392,13 +392,16 @@ var ASSISTANT_RANK = ["pohunek-assistant", "codex", "claude", "hermes"]
 // Agents that can run the onboard session, from `host inspect local --json`:
 // available, not refused by the version policy and not shell-based, the rule
 // of pohunek's assistant/src/host.rs, in the assistant's preference order.
+// pohunek-onboard is the profile tools/onboard writes for automatic mode, so
+// it is never offered as the agent that runs onboarding.
+var ONBOARD_PROFILE = "pohunek-onboard"
 function onboardAgents(inspect) {
   var runtimes = inspect && Array.isArray(inspect.runtimes) ? inspect.runtimes : []
   var out = []
   for (var i = 0; i < runtimes.length && out.length < 50; i++) {
     var r = runtimes[i]
     if (!r || !validSessionId(r.agent) || r.available !== true || r.supported === false) continue
-    if (r.agent === "shell" || r.agent_base === "shell" || out.indexOf(r.agent) >= 0) continue
+    if (r.agent === "shell" || r.agent_base === "shell" || r.agent === ONBOARD_PROFILE || out.indexOf(r.agent) >= 0) continue
     out.push(r.agent)
   }
   function rank(a) { var k = ASSISTANT_RANK.indexOf(a); return k < 0 ? ASSISTANT_RANK.length : k }
@@ -406,11 +409,13 @@ function onboardAgents(inspect) {
 }
 
 // Whether the onboarding record tools/onboard wrote names the session it
-// started. A record without one is a run whose session never started.
+// started and Undo onboarding has not completed. A record without a session is
+// a run whose session never started; an undone run counts as no run.
 function onboardingRecordLaunched(text) {
   var doc = null
   try { doc = JSON.parse(String(text || "")) } catch (e) { return false }
   return !!doc && typeof doc === "object" && doc.schema === 1 && validSessionId(doc.session_id)
+    && (doc.undone_at === undefined || doc.undone_at === null)
 }
 
 // State of the Get started card. facts: { installed, recordPresent (an

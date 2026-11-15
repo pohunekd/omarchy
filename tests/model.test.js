@@ -152,6 +152,11 @@ assert.strictEqual(M.onboardingRecordLaunched('{"schema":1,"session_id":"bad id"
 assert.strictEqual(M.onboardingRecordLaunched('{"schema":2,"session_id":"s-01J"}'), false, "unknown schema")
 assert.strictEqual(M.onboardingRecordLaunched("not json"), false)
 assert.strictEqual(M.onboardingRecordLaunched(""), false)
+// Undo onboarding: an undone run brings the card back to ready.
+const undone = '{"schema":1,"run_id":"ab","session_id":"s-01J","undone_at":"2026-11-15T10:00:00Z"}'
+assert.strictEqual(M.onboardingRecordLaunched(undone), false, "an undone run is not done")
+assert.strictEqual(card({ recordPresent: M.onboardingRecordLaunched(undone) }).state, "ready", "done -> ready after Undo")
+assert.strictEqual(card({ recordPresent: M.onboardingRecordLaunched('{"schema":1,"session_id":"s-01J","undone_at":null}') }).state, "done")
 
 // agent picker of the card
 assert.deepStrictEqual(M.onboardAgents({ runtimes: [
@@ -166,6 +171,9 @@ assert.deepStrictEqual(M.onboardAgents({ runtimes: [
 assert.deepStrictEqual(M.onboardAgents(null), [])
 assert.deepStrictEqual(M.onboardAgents({ runtimes: [{ agent: "zed", available: true }, { agent: "hermes", available: true },
   { agent: "alpha", available: true }] }), ["hermes", "alpha", "zed"])
+assert.deepStrictEqual(M.onboardAgents({ runtimes: [{ agent: "claude", agent_base: "claude", available: true },
+  { agent: "pohunek-onboard", agent_base: "claude", available: true, supported: true }] }), ["claude"],
+  "the automatic-mode profile never runs onboarding itself")
 
 // Optional: a real fetch.py snapshot must build without throwing.
 if (process.argv[2]) {
