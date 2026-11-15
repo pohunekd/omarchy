@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "pohunek.sessions",
   "name": "pohunek",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": "pohunekd",
   "license": "MIT",
   "description": "pohunek in the Omarchy bar: every coding agent on every machine, the ones that need you on top, one click to a real terminal.",
