@@ -106,7 +106,14 @@ Panel {
     var c = current()
     if (!c) return
     if (c.type === "header") { if (c.section.kind !== "needs") pohunek.toggleCollapsed(c.section.id) }
-    else attachRow(c.row)
+    else activateRow(c)
+  }
+
+  // A folded parent opens in place on Enter or a click; a leaf attaches.
+  function activateRow(entry) {
+    if (!entry || !entry.row) { if (entry) attachRow(entry.row); return }
+    if (entry.node && entry.node.collapsed) { pohunek.toggleSub(entry.row); return }
+    attachRow(entry.row)
   }
 
   function attachRow(row) {
@@ -307,7 +314,12 @@ Panel {
           if (row) root.openSheet("actions", row)
         } else if (dx < 0) {
           var c = root.current()
-          if (c && c.type === "header" && !c.section.collapsed && c.section.kind !== "needs") pohunek.toggleCollapsed(c.section.id)
+          if (!c) return
+          if (c.type === "header") {
+            if (!c.section.collapsed && c.section.kind !== "needs") pohunek.toggleCollapsed(c.section.id)
+          } else if (c.node && ((c.depth || 0) > 0 || (c.row && c.row.children && c.row.children.length > 0 && !c.node.collapsed))) {
+            pohunek.toggleSub(c.row)
+          }
         }
       }
       onActivateRequested: {
@@ -933,11 +945,15 @@ Panel {
       property var entry: null
       property int itemIndex: -1
       readonly property var row: entry ? entry.row : null
+      readonly property var node: entry ? entry.node : null
+      readonly property int depth: entry && entry.depth ? entry.depth : 0
+      readonly property bool hasKids: row && row.children ? row.children.length > 0 : false
+      readonly property bool folded: node ? !!node.collapsed : false
       readonly property bool hasCursor: root.cursorActive && root.cursor === itemIndex
       width: parent ? parent.width : 0
       implicitHeight: rowCol.implicitHeight + Style.space(16)
       opacity: row && row.stale ? 0.45 : 1
-      onClicked: { root.cursor = itemIndex; root.attachRow(row) }
+      onClicked: { root.cursor = itemIndex; root.activateRow(rowItem.entry) }
       onRightClicked: { root.cursor = itemIndex; root.openSheet("actions", row) }
 
       Rectangle {
@@ -948,9 +964,23 @@ Panel {
       }
       Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.hairline }
 
+      // The fold marker keeps its slot left of the state dot, then each
+      // tree level indents one step: a folded row never shifts when it
+      // opens, and a leaf never moves under its parent's marker.
+      Label {
+        visible: rowItem.hasKids
+        x: Style.space(4) + rowItem.depth * Style.space(14)
+        y: dot.y - Style.space(5)
+        width: Style.space(14)
+        text: rowItem.folded ? "›" : "⌄"
+        color: root.dim
+        font.pixelSize: Style.font.body
+        horizontalAlignment: Text.AlignHCenter
+      }
+
       Rectangle {
         id: dot
-        x: Style.space(6)
+        x: Style.space(20) + rowItem.depth * Style.space(14)
         y: Style.space(10) + (titleLabel.implicitHeight - height) / 2
         width: Style.space(8); height: width; radius: width / 2
         color: rowItem.row ? root.stateColor(rowItem.row.ownerState) : root.dim
@@ -968,7 +998,14 @@ Panel {
         Label {
           id: titleLabel
           width: parent.width
-          text: rowItem.row ? rowItem.row.title : ""
+          text: {
+            var r = rowItem.row
+            if (!r) return ""
+            var label = r.title
+            if (rowItem.folded && r.descendants > 0)
+              label += "  ⌄ " + Commons.I18n.formatNumber(r.descendants)
+            return label
+          }
           font.pixelSize: Style.font.body
         }
         Row {
@@ -1609,6 +1646,7 @@ Panel {
         { keys: ["↑", "↓"], text: root.t("help.move") },
         { keys: ["Enter"], text: root.t("help.enter") },
         { keys: ["→"], text: root.t("help.actions") },
+        { keys: ["←"], text: root.t("help.fold") },
         { keys: ["/"], text: root.t("filter.search") },
         { keys: ["s", "p"], text: root.t("help.filters") },
         { keys: ["v"], text: root.t("help.view") },

@@ -41,6 +41,8 @@ ShellRoot {
       svc.applySnapshot(JSON.stringify({ installed: true, hosts: [
         { target: "local", label: "workstation", local: true, reachable: true, notifications: [], sessions: [
           session("s-a1", { group: "Deps", work: { provider: "github", kind: "pr", id: "12", url: "https://github.com/a/b/pull/12" } }),
+          session("s-a1w", { group: "Deps", activity: "working", spawned_by: { session_id: "s-a1", daemon_id: "d-1" }, updatedAt: iso(20) }),
+          session("s-a1o", { activity: "working", spawned_by: "s-gone", updatedAt: iso(10) }),
           session("s-a2", { activity: "idle", updatedAt: iso(4000) }),
           session("s-a3", { state: "stopped", runtimeState: "terminal", resumable: true }) ] },
         { target: "laptop", label: "laptop", reachable: true, sessions: [
@@ -49,13 +51,30 @@ ShellRoot {
         { target: "gone", label: "gone", reachable: false, error: "timeout", sessions: [], notifications: [] } ] }), 0)
 
       console.log("snapshot")
-      check("rows built", svc.rows.length, 4)
+      check("rows built", svc.rows.length, 6)
       check("bar state", svc.counts.state, "needs")
       check("needs count", svc.counts.needs, 1)
       check("first section is Needs you", barPanel.sectionList[0].kind, "needs")
       check("needs row is the blocked one", barPanel.sectionList[0].rows[0].id, "s-b1")
       check("groups view lists Inbox and Deps", barPanel.sectionList.slice(1).map(function(s) { return s.name }).join(","), "Inbox,Deps")
       check("ended hidden by default", barPanel.visibleRows.some(function(r) { return r.ownerState === "ended" }), false)
+      check("worker folds under its manager", barPanel.visibleRows.filter(function(r) { return r.id === "s-a1w" }).length, 1)
+      var deps = null
+      for (var si = 0; si < barPanel.sectionList.length; si++) if (barPanel.sectionList[si].name === "Deps") deps = barPanel.sectionList[si]
+      check("Deps section found", deps !== null, true)
+      check("Deps folds the worker", deps.nodes.map(function(n) { return n.row.id }).join(","), "s-a1,s-a1o")
+      check("Deps depths", deps.nodes.map(function(n) { return n.depth }).join(","), "0,0")
+      check("folded manager carries the fold", deps.nodes[0].collapsed, true)
+      check("flat list hides the worker", barPanel.items.filter(function(i) { return i.type === "row" }).map(function(i) { return i.row.id }).join(","), "s-b1,s-a1,s-a1o,s-a2")
+      svc.toggleSub(deps.nodes[0].row)
+      check("opened manager lists parent before child", barPanel.items.filter(function(i) { return i.type === "row" }).map(function(i) { return i.row.id }).join(","), "s-b1,s-a1,s-a1w,s-a1o,s-a2")
+      var workerItem = null
+      for (var wi = 0; wi < barPanel.items.length; wi++) if (barPanel.items[wi].type === "row" && barPanel.items[wi].row.id === "s-a1w") workerItem = barPanel.items[wi]
+      check("child depth", workerItem ? workerItem.depth : -1, 1)
+      var opened = null
+      for (var oi = 0; oi < barPanel.sectionList.length; oi++) if (barPanel.sectionList[oi].name === "Deps") opened = barPanel.sectionList[oi]
+      svc.toggleSub(opened.nodes[0].row)
+      check("toggled back, worker hidden again", barPanel.items.filter(function(i) { return i.type === "row" }).map(function(i) { return i.row.id }).join(","), "s-b1,s-a1,s-a1o,s-a2")
       check("multi host", barPanel.multiHost, true)
       check("unreachable host listed", barPanel.unreachableHosts.length, 1)
 
@@ -77,6 +96,7 @@ ShellRoot {
       console.log("view")
       svc.setView("state")
       check("state view sections", barPanel.sectionList.map(function(s) { return s.id }).join(","), "needs-you,state:working,state:idle")
+      check("state view folds too", barPanel.sectionList[1].nodes.map(function(n) { return n.row.id }).join(","), "s-b1,s-a1,s-a1o")
       svc.setView("groups")
 
       console.log("sheets")
@@ -154,11 +174,28 @@ ShellRoot {
       barPanel.cursor = 0
       barPanel.moveCursor(1)
       check("cursor on the needs row", barPanel.currentRow() ? barPanel.currentRow().id : "", "s-b1")
+      // Index 1 is the Needs-you header, 2 the needs row, 3 the Inbox header.
       var collapsedBefore = barPanel.sectionList[1].collapsed
-      barPanel.cursor = 2
+      barPanel.cursor = 3
       barPanel.activate()
       check("Enter on a group header collapses it", barPanel.sectionList[1].collapsed, !collapsedBefore)
       svc.toggleCollapsed(barPanel.sectionList[1].id)
+      // Row 4 is the folded Deps manager: Enter opens it in place.
+      barPanel.cursor = 4
+      var openedBefore = barPanel.items.length
+      barPanel.activate()
+      check("Enter opens a folded manager", barPanel.items.length, openedBefore + 1)
+      check("Enter lands on the manager row", barPanel.currentRow() ? barPanel.currentRow().id : "", "s-a1")
+      // Row 5 is the worker: the left key folds it back under the manager.
+      barPanel.cursor = 5
+      var workerRow = barPanel.currentRow()
+      check("cursor on the worker", workerRow ? workerRow.id : "", "s-a1w")
+      var workerEntry = null
+      for (var ei = 0; ei < barPanel.items.length; ei++)
+        if (barPanel.items[ei].type === "row" && barPanel.items[ei].row.id === "s-a1w") workerEntry = barPanel.items[ei]
+      check("worker can fold back", workerEntry !== null && (workerEntry.depth || 0) > 0, true)
+      svc.toggleSub(workerEntry.row.parentRow || workerEntry.row)
+      check("folded back, worker hidden again", barPanel.items.length, openedBefore)
 
       console.log("get started card")
       var card = findAll(barPanel.panelContent, function(i) { try { return i.isOnboardCard === true } catch (e) { return false } })[0]

@@ -40,6 +40,80 @@ assert.strictEqual(M.workBadge({ provider: "linear", kind: "issue", id: "ABC-1" 
 assert.strictEqual(M.workBadge({ provider: "github", id: "7" }), "GH #7")
 assert.strictEqual(M.workBadge({ provider: "github" }), "")
 
+// sub-sessions fold under their manager
+assert.strictEqual(M.parentIdOf({ spawnedBy: "s-1" }), "s-1")
+assert.strictEqual(M.parentIdOf({ spawned_by: { session_id: "s-1", daemon_id: "d-2" } }), "s-1")
+assert.strictEqual(M.parentIdOf({ spawnedBy: "bad id" }), "")
+assert.strictEqual(M.parentIdOf({}), "")
+
+const R = (o) => { const s = S(o); const parentId = M.parentIdOf({ spawnedBy: s.spawnedBy, spawned_by: s.spawned_by });
+  return { ...s, group: "Inbox", ownerState: s.activity === "blocked" ? "needs" : "working",
+    parentId: parentId, host: "local", key: "local/" + s.id } }
+const manager = R({ id: "s-m", name: "manager", activity: "working" })
+const workerA = R({ id: "s-w1", name: "worker one", activity: "working", spawnedBy: "s-m" })
+const workerB = R({ id: "s-w2", name: "worker two", activity: "idle", spawnedBy: "s-m" })
+const grand = R({ id: "s-g", name: "grandchild", activity: "working", spawnedBy: "s-w1" })
+const orphan = R({ id: "s-o", name: "orphan", activity: "working", spawnedBy: "s-gone" })
+assert.strictEqual(manager.parentId, "", "a manager has no parent")
+assert.strictEqual(workerA.parentId, "s-m")
+assert.strictEqual(orphan.parentId, "s-gone")
+const tree = M.buildTrees([manager, workerA, workerB, grand, orphan], {})
+assert.strictEqual(tree.length, 2, "manager and orphan stay top-level")
+assert.deepStrictEqual(tree[0].children.map(r => r.id), ["s-w1", "s-w2"], "children sorted under the parent")
+assert.strictEqual(tree[0].children[0].children[0].id, "s-g", "nesting at any depth")
+assert.strictEqual(tree[0].descendants, 3)
+assert.strictEqual(tree[0].treeCollapsed, true, "folded by default with a count")
+const open = M.buildTrees([manager, workerA, workerB, grand, orphan], { [M.subCollapseId(manager)]: false })
+assert.strictEqual(open[0].treeCollapsed, false)
+assert.strictEqual(open[0].descendants, 3)
+// A child's own fold stays closed while an ancestor is open.
+const deeper = M.buildTrees([manager, workerA, workerB, grand, orphan],
+  { [M.subCollapseId(manager)]: false, [M.subCollapseId(workerA)]: true })
+assert.strictEqual(deeper[0].children[0].treeCollapsed, true)
+// A loop never hides a row: every link of a cycle is cut and each row
+// of it stays top-level.
+const cyclic = M.buildTrees([S({ id: "s-x", spawnedBy: "s-y" }), S({ id: "s-y", spawnedBy: "s-x" })], {})
+assert.strictEqual(cyclic.length, 2, "a cycle stays flat")
+assert.deepStrictEqual(M.sectionNodes([S({ id: "s-x", spawnedBy: "s-y" }), S({ id: "s-y", spawnedBy: "s-x" })], {}).map(n => n.row.id), ["s-x", "s-y"])
+const selfed = M.buildTrees([S({ id: "s-z", spawnedBy: "s-z" })], {})
+assert.strictEqual(selfed.length, 1, "a self-parent stays top-level")
+// A parent on another host folds under the same session id.
+const remote = M.buildTrees([{ ...manager, host: "local", key: "local/s-m" },
+  { ...workerA, host: "air", key: "air/s-w1" }], {})
+assert.strictEqual(remote.length, 1, "cross-host parent merges")
+// A section lists the folded rows inside the parent's group with the depth.
+const treeFiltered = M.applyFilters([R({ id: "s-m", name: "manager", activity: "working" }),
+  R({ id: "s-w1", name: "worker one", activity: "working", spawnedBy: "s-m" }),
+  R({ id: "s-w2", name: "worker two", activity: "idle", spawnedBy: "s-m" }),
+  R({ id: "s-g", name: "grandchild", activity: "working", spawnedBy: "s-w1" }),
+  R({ id: "s-o", name: "orphan", activity: "working", spawnedBy: "s-gone" })], {})
+let treeSecs = M.sections(treeFiltered, "groups", {})
+const inbox = treeSecs.find(s => s.name === "Inbox")
+assert.deepStrictEqual(inbox.nodes.map(n => n.row.id), ["s-m", "s-o"],
+  "a folded group lists the parent rows only")
+assert.strictEqual(inbox.nodes[0].collapsed, true, "the parent row carries the fold")
+assert.deepStrictEqual(M.flatten(treeSecs).filter(i => i.type === "row").map(i => i.row.id), ["s-m", "s-o"],
+  "a folded group navigates the parent rows only")
+// Explicitly opened, the parent comes before its children with depths.
+const openSecs = M.sections(treeFiltered, "groups",
+  { collapsed: { [M.subCollapseId(manager)]: false, [M.subCollapseId(workerA)]: false } })
+const openInbox = openSecs.find(s => s.name === "Inbox")
+assert.deepStrictEqual(openInbox.nodes.map(n => n.row.id), ["s-m", "s-w1", "s-g", "s-w2", "s-o"], "parent before children")
+assert.deepStrictEqual(openInbox.nodes.map(n => n.depth), [0, 1, 2, 1, 0])
+// Needs you keeps its own order and still folds sub-sessions after it.
+const needy = R({ id: "s-n", name: "need", activity: "blocked" })
+const needyChild = R({ id: "s-nc", name: "need child", activity: "blocked", spawnedBy: "s-n" })
+const needFiltered = M.applyFilters([manager, workerA, needy, needyChild], {})
+const needSecs = M.sections(needFiltered, "groups", {})
+assert.strictEqual(needSecs[0].id, "needs-you")
+assert.deepStrictEqual(needSecs[0].nodes.map(n => n.row.id), ["s-n"],
+  "a folded Needs-you section lists the parent row only")
+const needOpen = M.sections(needFiltered, "groups", { collapsed: { [M.subCollapseId(needy)]: false } })
+assert.deepStrictEqual(needOpen[0].nodes.map(n => n.row.id), ["s-n", "s-nc"])
+// subOpenMap stores the explicit open; toggling back folds again.
+assert.deepStrictEqual(M.subOpenMap({}, manager, true), { [M.subCollapseId(manager)]: false })
+assert.deepStrictEqual(M.subOpenMap({ [M.subCollapseId(manager)]: false }, manager, false), { [M.subCollapseId(manager)]: true })
+
 // groups
 assert.strictEqual(M.groupOf(S({ group: null })), "Inbox")
 assert.strictEqual(M.groupOf(S({ group: "Dependencies" })), "Dependencies")

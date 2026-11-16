@@ -154,6 +154,28 @@ function groupOf(s) {
 
 function sameGroup(a, b) { return String(a).toLowerCase() === String(b).toLowerCase() }
 
+// The manager a row folds under: `spawned_by` names the spawning session id,
+// either as the daemon's {session_id, daemon_id} object or as a bare id. The
+// daemon id is not compared: a session id is unique on its own, and a
+// cross-host origin is a reference, not a session this panel resolves.
+function parentIdOf(s) {
+  var sb = s.spawnedBy === undefined ? s.spawned_by : s.spawnedBy
+  var id = typeof sb === "string" ? sb : (sb && typeof sb === "object" ? sb.session_id : null)
+  return validSessionId(id) ? id : ""
+}
+
+function subCollapseId(row) { return "sub:" + row.key }
+// Folded parents hide their count of sub-sessions under one row; the
+// stored layout state is the ground truth (a folded id lists `true`,
+// a missing id lists the default, open here), so an explicit `false`
+// is the way an opener stays open.
+function subOpenMap(collapsed, row, open) {
+  var c = Object.assign({}, collapsed || {})
+  var id = subCollapseId(row)
+  if (open) { if (c[id] !== false) c[id] = false }
+  else if (c[id] !== true) c[id] = true
+  return c
+}
 // --- Snapshot → rows -------------------------------------------------------
 
 // snapshot: { hosts: [{target,label,reachable,sessions,notifications,...}] }
@@ -203,6 +225,8 @@ function buildRows(hosts, clocks, now, thresholdMs) {
         branch: clip(s.branch, 120),
         cwd: clip(s.cwd, 400),
         worktree: clip(s.worktree, 400),
+        parentId: parentIdOf(s),
+        childCount: typeof s.children === "number" && s.children >= 0 ? Math.floor(s.children) : 0,
         badge: workBadge(s.work),
         workUrl: safeUrl(s.work && s.work.url),
         role: clip(s.work && s.work.role, 60),
@@ -298,6 +322,106 @@ function groupNames(rows, layout) {
   return head.concat(extra)
 }
 
+// Sub-session trees. A row whose `spawned_by` names a row that is present
+// folds under it (a parent on another host counts: sessions are merged
+// across hosts, and a session id is unique on its own). A self-parent and
+// an unknown parent (an orphan) stay top-level rows. A chain that loops
+// back on itself can never anchor, so each link of a cycle is cut in turn
+// and every row of it stays top-level. The fold is closed by default and
+// opens in place; explicit folds live in layout.collapsed under the sub id.
+function buildTrees(rows, collapsed) {
+  var snap = rows.slice(), byId = {}, top = []
+  for (var i = 0; i < snap.length; i++) {
+    // Copy the snapshot: one section listing only children still names the
+    // parent, and copying keeps one section from rewriting another.
+    var src = snap[i]
+    var r = {}
+    for (var f in src) r[f] = src[f]
+    if (r.parentId === undefined) r.parentId = parentIdOf(r)
+    r.children = []
+    r.descendants = 0
+    r.parentRow = null
+    if (r.flat === undefined) r.flat = false
+    snap[i] = r
+    if (!byId[r.id]) byId[r.id] = r
+  }
+  rows = snap
+  // Attach rows to their parents. A row joins only once its parent is
+  // placed, so the parent chain anchors head-first. Unknown parents
+  // (orphans) and self-parents stay top-level; a chain that loops back on
+  // itself can never anchor, so every link of a cycle is cut and each row
+  // of it stays top-level.
+  var placed = {}
+  function attach(r) {
+    if (placed[r.id]) return
+    if (!r.parentId || r.parentId === r.id) { r.parentId = ""; placed[r.id] = true; top.push(r); return }
+    var p = byId[r.parentId] || null
+    if (!p || p === r) { r.parentId = ""; placed[r.id] = true; top.push(r); return }
+    // Loop back: the parent chain returns to this row (or repeats a row),
+    // so neither link may hide the other.
+    var seen = {}
+    seen[r.id] = true
+    var bad = false
+    for (var q = p; q; q = q.parentRow || byId[q.parentId] || null) {
+      if (q === r || seen[q.id]) { bad = true; break }
+      seen[q.id] = true
+      if (q.parentRow) continue
+      if (!q.parentId || q.parentId === q.id || !byId[q.parentId]) break
+    }
+    if (bad) {
+      var cut = r
+      while (cut && !placed[cut.id]) {
+        cut.parentId = ""
+        placed[cut.id] = true
+        top.push(cut)
+        var nxt = null
+        for (var w = 0; w < rows.length; w++) {
+          if (!placed[rows[w].id] && rows[w].parentId === cut.id) { nxt = rows[w]; break }
+        }
+        cut = nxt
+      }
+      return
+    }
+    if (!placed[p.id]) attach(p)
+    if (!placed[p.id]) { r.parentId = ""; placed[r.id] = true; top.push(r); return }
+    for (var a = p; a; a = a.parentRow) a.descendants++
+    r.parentRow = p
+    p.children.push(r)
+    placed[r.id] = true
+  }
+  for (var j = 0; j < rows.length; j++) attach(rows[j])
+  for (var k = 0; k < rows.length; k++) {
+    var n = rows[k]
+    n.children.sort(rowOrder)
+    if (n.flat) n.treeCollapsed = false
+    else {
+      var c = collapsed[subCollapseId(n)]
+      n.treeCollapsed = c === undefined ? n.children.length > 0 : c === true
+    }
+  }
+  top.sort(rowOrder)
+  return top
+}
+
+// A visible tree item: the parent row, then its open children recursively.
+// A collapsed parent still lists its row, with the folded count.
+function treeItems(top) {
+  var items = []
+  function walk(row, depth) {
+    var kids = row.children.filter(function(c) { return c.parentRow === row })
+    var shut = kids.length > 0 && row.treeCollapsed
+    items.push({ row: row, depth: depth, collapsed: shut })
+    if (shut) return
+    for (var i = 0; i < kids.length; i++) walk(kids[i], depth + 1)
+  }
+  for (var t = 0; t < top.length; t++) walk(top[t], 0)
+  return items
+}
+
+function sectionNodes(list, collapsed) {
+  return treeItems(buildTrees(list, collapsed || {}))
+}
+
 function sections(rows, view, layout) {
   var collapsed = (layout && layout.collapsed) || {}
   var needing = [], rest = []
@@ -305,7 +429,8 @@ function sections(rows, view, layout) {
   needing.sort(needsOrder)
   var out = []
   if (needing.length > 0)
-    out.push({ id: NEEDS_YOU, kind: "needs", name: "", rows: needing, count: needing.length, collapsed: false })
+    out.push({ id: NEEDS_YOU, kind: "needs", name: "", rows: needing, nodes: sectionNodes(needing, collapsed),
+               count: needing.length, collapsed: false })
 
   if (view === "state") {
     var order = ["working", "idle", "problem", "nostate", "ended"]
@@ -313,7 +438,8 @@ function sections(rows, view, layout) {
       var list = rest.filter(function(r) { return r.ownerState === order[s] }).sort(rowOrder)
       if (list.length === 0) continue
       var sid = "state:" + order[s]
-      out.push({ id: sid, kind: "state", state: order[s], name: "", rows: list, count: list.length, collapsed: !!collapsed[sid] })
+      out.push({ id: sid, kind: "state", state: order[s], name: "", rows: list, nodes: sectionNodes(list, collapsed),
+                 count: list.length, collapsed: !!collapsed[sid] })
     }
     return out
   }
@@ -325,8 +451,8 @@ function sections(rows, view, layout) {
     var isInbox = sameGroup(names[g], INBOX)
     // Inbox and the owner's own groups show even when empty, so a session
     // can be moved into them.
-    out.push({ id: gid, kind: "group", name: names[g], inbox: isInbox, rows: members, count: members.length,
-               collapsed: !!collapsed[gid] })
+    out.push({ id: gid, kind: "group", name: names[g], inbox: isInbox, rows: members, nodes: sectionNodes(members, collapsed),
+               count: members.length, collapsed: !!collapsed[gid] })
   }
   return out
 }
@@ -338,7 +464,11 @@ function flatten(sectionList) {
     var sec = sectionList[i]
     items.push({ type: "header", section: sec, key: "h:" + sec.id })
     if (sec.collapsed) continue
-    for (var j = 0; j < sec.rows.length; j++) items.push({ type: "row", row: sec.rows[j], section: sec, key: "r:" + sec.rows[j].key })
+    var nodes = sec.nodes || (sec.rows || []).map(function(r) { return { row: r, depth: 0, open: true, collapsed: false } })
+    for (var j = 0; j < nodes.length; j++) {
+      var n = nodes[j]
+      items.push({ type: "row", row: n.row, depth: n.depth, node: n, section: sec, key: "r:" + n.row.key })
+    }
   }
   return items
 }
@@ -536,6 +666,7 @@ if (typeof module !== "undefined") {
     groupNames: groupNames, ageParts: ageParts, pushRecent: pushRecent, filterCount: filterCount,
     fuzzyScore: fuzzyScore, fuzzyFilter: fuzzyFilter, FUZZY_THRESHOLD: FUZZY_THRESHOLD,
     onboardAgents: onboardAgents, onboardingCard: onboardingCard, onboardingRecordLaunched: onboardingRecordLaunched,
+    parentIdOf: parentIdOf, subCollapseId: subCollapseId, subOpenMap: subOpenMap, buildTrees: buildTrees, sectionNodes: sectionNodes,
     INBOX: INBOX, NEEDS_YOU: NEEDS_YOU
   }
 }

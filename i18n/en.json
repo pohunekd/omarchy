@@ -151,6 +151,7 @@
  "help.rightClickText": "refresh every host",
  "help.panel": "In this panel",
  "help.move": "move",
+ "help.fold": "fold a sub-session back under its manager",
  "help.enter": "attach, or fold a group",
  "help.actions": "actions of the row (also ⋮ or right click)",
  "help.filters": "State and Project filters",

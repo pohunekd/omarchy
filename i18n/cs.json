@@ -159,6 +159,7 @@
  "help.rightClickText": "obnovit všechny hosty",
  "help.panel": "V tomto panelu",
  "help.move": "pohyb",
+ "help.fold": "sbalit pod-relaci zpět pod manažera",
  "help.enter": "připojit, nebo sbalit skupinu",
  "help.actions": "akce řádku (také ⋮ nebo pravý klik)",
  "help.filters": "filtry Stav a Projekt",

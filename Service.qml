@@ -255,6 +255,15 @@ Item {
     if (c[sectionId]) delete c[sectionId]; else c[sectionId] = true
     saveLayout(Object.assign({}, layout, { collapsed: c }))
   }
+  // A sub-session fold is closed by default and open is the stored
+  // override, so toggling the sub id alone could never open it: this
+  // switches between the stored open and the stored closed states.
+  function toggleSub(row) {
+    if (!row) return
+    var collapsed = layout.collapsed || {}
+    saveLayout(Object.assign({}, layout,
+      { collapsed: Model.subOpenMap(collapsed, row, row.treeCollapsed === true) }))
+  }
   function addGroup(name) {
     var checked = Model.checkGroupName(name)
     if (!checked.ok) return checked
