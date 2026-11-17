@@ -237,7 +237,7 @@ ShellRoot {
       var managerEntry = null
       for (var mi = 0; mi < barPanel.items.length; mi++)
         if (barPanel.items[mi].type === "row" && barPanel.items[mi].row.id === "s-a1") managerEntry = barPanel.items[mi]
-      check("opening the manager changes nothing", barPanel.foldBack(managerEntry), false)
+      check("foldBack on a folded manager does nothing", barPanel.foldBack(managerEntry), false)
       barPanel.activate()
       var managerEntryOpen = null
       for (var mo = 0; mo < barPanel.items.length; mo++)

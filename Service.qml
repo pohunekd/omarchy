@@ -261,15 +261,9 @@ Item {
   function toggleSub(row) {
     if (!row) return
     var c = Object.assign({}, layout.collapsed || {})
-    // The panel lists Needs-you rows flat (Android parity), so a Needs-you
-    // copy of a folded parent must not steal the group's open row when
-    // the fold map is pruned: rebuild every section the panel shows from
-    // the full snapshot (Needs you is its own flat list) and take the
-    // union of their live `sub:` keys.
     // The fold spans sections (a worker folds under its manager
     // wherever the manager is listed), so the live `sub:` keys come
-    // from one tree over the full snapshot, not from per-section
-    // builds that no longer see cross-group parents.
+    // from one tree over the full snapshot, Needs you included.
     var perSection = {}
     var tree = Model.foldTree(Model.applyFilters(rows, {}), c)
     var keys = Model.liveSubKeys(tree)

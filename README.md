@@ -100,12 +100,14 @@ needs you. This widget puts all of it in the bar you already look at:
   `companion.group` metadata, so they are the same groups the pohunek desktop and
   Android companions show. Sessions a manager spawned fold under it with
   a count and open in place; everything waiting for you stays in its own
-  row in Needs you, with its sub-session count, and a search opens every
-  fold, so a hit never sits behind a closed parent. A sub-session whose
-  manager is gone stays a top-level row. A worker folds under its
-  manager wherever the manager is listed, whatever group either of
+  row in Needs you, with its sub-session count. While a search query is
+  set the fold is off (Android parity), so every hit stays a top-level
+  row in its own section. A sub-session whose manager is gone stays a
+  top-level row. In both My groups and By state a worker folds under its
+  manager wherever the manager is listed, whatever section either of
   them is in: a section that only the fold emptied is dropped, except
-  Inbox and your own groups, which keep their header. A folded parent carries the worst
+  Inbox and your own groups, which keep their header and a 0 count.
+  A header counts the rows it shows. A folded parent carries the worst
   state of its hidden rows: its dot and fold marker cue when a worker under
   it waits for you or broke.
 - **🚀 New sessions without the CLI.** Pick a host, a project and an agent (with
