@@ -117,7 +117,10 @@
  "state.problem": "Runtime problem",
  "state.nostate": "No agent state",
  "state.ended": "Ended",
- "subSessions": "sub-sessions",
+ "subSessions": {
+  "one": "%1 sub-session",
+  "other": "%1 sub-sessions"
+ },
  "subagents": {
   "one": "%1 subagent",
   "other": "%1 subagents"

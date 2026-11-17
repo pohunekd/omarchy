@@ -113,7 +113,7 @@ Panel {
   }
 
   // A folded parent opens in place on Enter or a click; a leaf attaches.
-  // Simplify the entry without a row to a no-op: attachRow ignores it.
+  // An entry without a row does nothing.
   function activateRow(entry) {
     if (!entry || !entry.row) return
     if (entry.node && entry.node.collapsed) { pohunek.toggleSub(entry.row); return }
@@ -1003,8 +1003,9 @@ Panel {
         y: dot.y - Style.space(5)
         width: Style.space(14)
         text: rowItem.folded ? "›" : "⌄"
-        // A folded fold marker carries the subtree attention: red when a
-        // descendant needs the owner, orange while one has a problem.
+        // A folded marker carries the hidden subtree attention: red while a
+        // descendant broke, orange while one needs the owner (reserved for
+        // omarchy#25 isolated rows; waiting rows list in Needs you today).
         color: rowItem.folded && rowItem.row && rowItem.row.problemDown > 0 ? root.urgent
              : rowItem.folded && rowItem.row && rowItem.row.needsDown > 0 ? root.stateColor("needs") : root.dim
         font.pixelSize: Style.font.body
@@ -1042,7 +1043,7 @@ Panel {
               if (r.needsDown > 0) label += " · " + Commons.I18n.formatNumber(r.needsDown) + " " + root.t("state.needs")
               if (r.problemDown > 0) label += " · " + Commons.I18n.formatNumber(r.problemDown) + " " + root.t("state.problem")
             } else if (r.descendants > 0 && !rowItem.folded) {
-              label += "  · " + Commons.I18n.formatNumber(r.descendants) + " " + root.t("subSessions")
+              label += "  · " + strings.tn("subSessions", r.descendants).arg(Commons.I18n.formatNumber(r.descendants))
             }
             return label
           }

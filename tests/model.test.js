@@ -102,21 +102,27 @@ const openInbox = openSecs.find(s => s.name === "Inbox")
 assert.deepStrictEqual(openInbox.nodes.map(n => n.row.id), ["s-m", "s-w1", "s-g", "s-w2", "s-o"], "parent before children")
 assert.deepStrictEqual(openInbox.nodes.map(n => n.depth), [0, 1, 2, 1, 0])
 // Needs you never folds (Android folds group sections only): every waiting
-// session lists in its own place with its sub-session count, with the
-// oldest wait first all the way to the rendered rows.
+// session is its own depth-0 row in waiting order, with its sub-session
+// count as an annotation. A worker that waited longest comes first even
+// when its manager waits too.
 const needy = R({ id: "s-n", name: "need", activity: "blocked" })
+needy.waitingSince = NOW - 100 * 1000
 const needyChild = R({ id: "s-nc", name: "need child", activity: "blocked", spawnedBy: "s-n" })
+needyChild.waitingSince = NOW - 3000 * 1000
+const needSolo = R({ id: "s-nx", name: "need solo", activity: "blocked" })
+needSolo.waitingSince = NOW - 1000 * 1000
 const other = R({ id: "s-r", name: "other", activity: "working" })
-const needFiltered = M.applyFilters([other, needy, needyChild], {})
+const needFiltered = M.applyFilters([other, needy, needyChild, needSolo], {})
 const needSecs = M.sections(needFiltered, "groups", {})
 assert.strictEqual(needSecs[0].id, "needs-you")
-assert.deepStrictEqual(needSecs[0].nodes.map(n => n.row.id), ["s-n", "s-nc"],
-  "a Needs-you section lists parent and child in their own places")
-assert.deepStrictEqual(M.flatten(needSecs).filter(i => i.type === "row" && i.section.kind === "needs").map(i => i.row.id), ["s-n", "s-nc"])
+assert.deepStrictEqual(needSecs[0].nodes.map(n => n.row.id), ["s-nc", "s-nx", "s-n"],
+  "Needs you lists every waiting row flat in waiting order")
+assert.deepStrictEqual(needSecs[0].nodes.map(n => n.depth), [0, 0, 0], "Needs you has no nesting")
+assert.deepStrictEqual(M.flatten(needSecs).filter(i => i.type === "row" && i.section.kind === "needs").map(i => i.row.id),
+  ["s-nc", "s-nx", "s-n"], "flatten keeps the waiting order")
 assert.strictEqual(needSecs[0].nodes[0].collapsed, false, "Needs you carries no fold")
-// A waiting child counts on its parent, not behind a fold.
-assert.strictEqual(needSecs[0].nodes[0].row.needsDown, 1)
-assert.strictEqual(needSecs[0].nodes[0].row.descendants, 1)
+// A waiting manager still annotates how many wait under it.
+assert.strictEqual(needSecs[0].nodes.find(n => n.row.id === "s-n").row.descendants, 1)
 // A grandchild's attention reaches the folded manager through the middle.
 assert.strictEqual(deeper[0].worstDown, deeper[0].children[0].worstDown,
   "a middle row hands the subtree attention up")
@@ -160,12 +166,16 @@ const dupTree = M.buildTrees([dupA, dupB, dupWa, dupWb], {})
 assert.strictEqual(dupTree.length, 2, "both copies of a duplicated id render")
 assert.ok(dupTree.every(t => t.children.length === 1 && t.children[0].host === t.host),
   "each copy folds under its own host's manager")
-// A tail into a cycle attaches normally; only the loop links stay flat.
-const tail = M.buildTrees([R({ id: "s-a", spawnedBy: "s-c" }), R({ id: "s-b", spawnedBy: "s-c" }),
-  R({ id: "s-c", spawnedBy: "s-a" }), R({ id: "s-d", spawnedBy: "s-a" })], {})
-assert.deepStrictEqual(tail.map(r => r.id).sort(), ["s-a", "s-c"], "the cycle stays flat")
-assert.deepStrictEqual(tail.find(r => r.id === "s-a").children.map(c => c.id), ["s-d"], "a tail into the cycle attaches")
-assert.deepStrictEqual(tail.find(r => r.id === "s-c").children.map(c => c.id), ["s-b"], "a tail into the cycle attaches")
+// A tail into a cycle attaches normally in either input order: only the
+// loop links stay flat, cut at the first index of the repeated row.
+const tailRows = [R({ id: "s-a", spawnedBy: "s-c" }), R({ id: "s-b", spawnedBy: "s-c" }),
+  R({ id: "s-c", spawnedBy: "s-a" }), R({ id: "s-d", spawnedBy: "s-a" })]
+for (const rows of [tailRows, tailRows.slice().reverse()]) {
+  const tail = M.buildTrees(rows, {})
+  assert.deepStrictEqual(tail.map(r => r.id).sort(), ["s-a", "s-c"], "the cycle stays flat")
+  assert.deepStrictEqual(tail.find(r => r.id === "s-a").children.map(c => c.id), ["s-d"], "a tail into the cycle attaches")
+  assert.deepStrictEqual(tail.find(r => r.id === "s-c").children.map(c => c.id), ["s-b"], "a tail into the cycle attaches")
+}
 // A search opens every fold, so a hit never sits behind a closed parent.
 const searchSecs = M.sections(treeFiltered, "groups", { searchOpen: true })
 assert.deepStrictEqual(searchSecs.find(s => s.name === "Inbox").nodes.map(n => n.row.id),

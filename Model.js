@@ -375,7 +375,6 @@ function buildTrees(rows, collapsed, order) {
     r.problemDown = 0
     r.worstDown = r.ownerState
     r.parentRow = null
-    if (r.flatNeeds === undefined) r.flatNeeds = false
     if (r.flatSearch === undefined) r.flatSearch = false
     snap[i] = r
     if (!byId[r.id]) byId[r.id] = r
@@ -400,30 +399,30 @@ function buildTrees(rows, collapsed, order) {
     var p = findParent(r)
     if (!p || p === r) { r.parentId = ""; placed[r.key] = true; top.push(r); return }
     // Loop back: the parent chain returns to this row (or repeats a row),
-    // so the links of that loop cannot nest. Cut exactly the loop links;
-    // `seen` holds the chain from this row up, `loop` then marks the rows
-    // that form the cycle back to this row.
+    // so the links of that loop cannot nest. Cut exactly the loop links:
+    // the rows from the first index of the repeated row onward. Rows the
+    // walk passed before reaching the loop are a tail into the cycle and
+    // attach normally once the loop links are top-level.
     var seen = {}
-    seen[r.id] = true
+    seen[r.key] = 0
     var chain = [r]
-    var bad = false
+    var badAt = -1
     for (var q = p; q; q = q.parentRow || findParent(q)) {
-      if (q === r || seen[q.id + "\0" + q.key]) { bad = true; break }
-      seen[q.id + "\0" + q.key] = true
+      if (q === r) { badAt = 0; break }
+      if (seen[q.key] !== undefined) { badAt = seen[q.key]; break }
+      seen[q.key] = chain.length
       chain.push(q)
       if (q.parentRow) continue
       if (!findParent(q)) break
     }
-    if (bad) {
-      var loop = {}
-      for (var l = 0; l < chain.length; l++) loop[chain[l].key] = true
-      for (var m = 0; m < chain.length; m++)
-        if (!placed[chain[m].key] && loop[chain[m].key]) {
+    if (badAt >= 0) {
+      for (var m = badAt; m < chain.length; m++)
+        if (!placed[chain[m].key]) {
           chain[m].parentId = ""
           placed[chain[m].key] = true
           top.push(chain[m])
         }
-      if (!placed[r.key]) { r.parentId = ""; placed[r.key] = true; top.push(r) }
+      if (!placed[r.key]) attach(r)
       return
     }
     if (!placed[p.key]) attach(p)
@@ -438,15 +437,15 @@ function buildTrees(rows, collapsed, order) {
     placed[r.key] = true
   }
   for (var j = 0; j < rows.length; j++) attach(rows[j])
-  // A folded Needs-you marker would hide a waiting session, and a search
-  // hit must never sit behind a closed parent, so both list every row in
-  // its own place. A stored `false` opens only the row whose key names
-  // it: children settle first so an open manager shows their own folds,
-  // then this row reads its own stored key.
+  // A search hit must never sit behind a closed parent, so it lists every
+  // row in its own place (Needs you renders flat rows by itself). A stored
+  // `false` opens only the row whose key names it: children settle first
+  // so an open manager shows their own folds, then this row reads its own
+  // stored key.
   function settle(n) {
     n.children.sort(rowOrder)
     for (var w = 0; w < n.children.length; w++) settle(n.children[w])
-    if (n.flatNeeds || n.flatSearch) n.treeCollapsed = false
+    if (n.flatSearch) n.treeCollapsed = false
     else {
       var c = collapsed[subCollapseId(n)]
       n.treeCollapsed = c === undefined ? n.children.length > 0 : c === true
@@ -484,8 +483,7 @@ function sectionNodes(list, collapsed, order, expand) {
   var rows = (list || []).map(function(r) {
     var c = {}
     for (var f in r) c[f] = r[f]
-    if (expand === "needs") c.flatNeeds = true
-    else if (expand === "search") c.flatSearch = true
+    if (expand === "search") c.flatSearch = true
     return c
   })
   return treeItems(buildTrees(rows, collapsed || {}, order))
@@ -503,10 +501,22 @@ function sections(rows, view, layout) {
   needing.sort(needsOrder)
   var out = []
   // Needs you never folds (Android folds group sections only): every
-  // waiting session lists in its own place, with its sub-session count.
-  if (needing.length > 0)
-    out.push({ id: NEEDS_YOU, kind: "needs", name: "", rows: needing, nodes: sectionNodes(needing, collapsed, needsOrder, expand || "needs"),
+  // waiting session is its own depth-0 row in waiting order, with its
+  // sub-session count as an annotation from the full tree.
+  if (needing.length > 0) {
+    var needCounts = {}
+    var needTree = buildTrees(rows.slice(), collapsed, needsOrder)
+    for (var t = 0; t < needTree.length; t++)
+      needCounts[needTree[t].key] = needTree[t].descendants
+    var needNodes = needing.map(function(r) {
+      var c = {}
+      for (var f in r) c[f] = r[f]
+      c.descendants = needCounts[r.key] || 0
+      return { row: c, depth: 0, open: true, collapsed: false, tree: false }
+    })
+    out.push({ id: NEEDS_YOU, kind: "needs", name: "", rows: needing, nodes: needNodes,
                count: needing.length, collapsed: false })
+  }
 
   if (view === "state") {
     var order = ["working", "idle", "problem", "nostate", "ended"]
