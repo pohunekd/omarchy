@@ -506,8 +506,17 @@ function sections(rows, view, layout) {
   if (needing.length > 0) {
     var needCounts = {}
     var needTree = buildTrees(rows.slice(), collapsed, needsOrder)
-    for (var t = 0; t < needTree.length; t++)
-      needCounts[needTree[t].key] = needTree[t].descendants
+    // Every waiting row annotates its count, like Android reads
+    // tree.children(key): a waiting worker with its own waiting child
+    // counts it too, not only top-level managers.
+    for (var t = 0; t < needTree.length; t++) {
+      var stack = [needTree[t]]
+      while (stack.length > 0) {
+        var n = stack.pop()
+        needCounts[n.key] = n.descendants
+        for (var k = 0; k < n.children.length; k++) stack.push(n.children[k])
+      }
+    }
     var needNodes = needing.map(function(r) {
       var c = {}
       for (var f in r) c[f] = r[f]

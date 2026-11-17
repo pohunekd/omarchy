@@ -123,6 +123,14 @@ assert.deepStrictEqual(M.flatten(needSecs).filter(i => i.type === "row" && i.sec
 assert.strictEqual(needSecs[0].nodes[0].collapsed, false, "Needs you carries no fold")
 // A waiting manager still annotates how many wait under it.
 assert.strictEqual(needSecs[0].nodes.find(n => n.row.id === "s-n").row.descendants, 1)
+// A waiting worker with its own waiting child annotates it too.
+const needGrand = R({ id: "s-ng", name: "need grandchild", activity: "blocked", spawnedBy: "s-nc" })
+needGrand.waitingSince = NOW - 4000 * 1000
+const needNested = M.sections(M.applyFilters([needy, needyChild, needGrand], {}), "groups", {})
+assert.deepStrictEqual(needNested[0].nodes.map(n => n.row.id), ["s-ng", "s-nc", "s-n"],
+  "nested waiting rows stay flat in waiting order")
+assert.strictEqual(needNested[0].nodes.find(n => n.row.id === "s-nc").row.descendants, 1,
+  "a waiting worker counts its own waiting child")
 // A grandchild's attention reaches the folded manager through the middle.
 assert.strictEqual(deeper[0].worstDown, deeper[0].children[0].worstDown,
   "a middle row hands the subtree attention up")
