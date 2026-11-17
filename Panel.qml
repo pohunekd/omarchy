@@ -923,7 +923,7 @@ Panel {
       width: parent ? parent.width : 0
       implicitHeight: headerRow.implicitHeight + Style.space(sec && sec.kind === "needs" ? 14 : 18)
       onClicked: { root.cursor = itemIndex; if (sec && sec.kind !== "needs") pohunek.toggleCollapsed(sec.id) }
-      onRightClicked: if (sec && sec.kind === "group" && !sec.inbox && sec.count === 0) pohunek.removeGroup(sec.name)
+      onRightClicked: if (sec && sec.kind === "group" && !sec.inbox && sec.members === 0) pohunek.removeGroup(sec.name)
 
       Rectangle { anchors.fill: parent; color: header.hasCursor || header.hovered ? root.chipFill : "transparent"; radius: Style.cornerRadius }
       Rectangle { visible: header.sec && header.sec.kind !== "needs" && header.itemIndex > 0; width: parent.width; height: 1; color: root.hairline }

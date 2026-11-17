@@ -178,6 +178,14 @@ const ownedDeps = ownedDrop.find(s => s.name === "Deps")
 assert.strictEqual(ownedDeps.nodes.length, 0, "the owned section keeps no shown row")
 assert.strictEqual(ownedDeps.rows.length, 0, "the owned section lists no shown row")
 assert.strictEqual(ownedDeps.count, 0, "a kept emptied section shows 0 (Android GroupSections.kt:70)")
+assert.strictEqual(ownedDeps.members, 2, "the kept section keeps its own-member count")
+// M1: removal gates on the own-member count, never on the shown count:
+// a group whose members all folded away may not be removed on right-click.
+const removable = function(sec) { return !!sec && sec.kind === "group" && !sec.inbox && sec.members === 0 }
+assert.strictEqual(removable(ownedDeps), false, "right-click refuses a group that still holds sessions")
+const removableEmpty = M.sections(crossFiltered, "groups", { groups: ["Empty"] }).find(s => s.name === "Empty")
+assert.strictEqual(removableEmpty.members, 0, "an empty owned group has no members")
+assert.strictEqual(removable(removableEmpty), true, "right-click removes a truly empty group")
 // L3 case 4: a manager with no group lists in Inbox; its worker in
 // another group folds under it there, and the emptied group drops.
 const noGroupMgr = M.sections(M.applyFilters([R({ id: "s-m", name: "manager", activity: "working", group: null }),
@@ -212,6 +220,11 @@ assert.deepStrictEqual(searchCross.find(s => s.id === "group:inbox").nodes.map(n
 assert.deepStrictEqual(searchCross.find(s => s.id === "group:deps").nodes.map(n => n.row.id), ["s-w1", "s-w2"],
   "a search keeps the workers in their own section")
 assert.ok(searchCross.every(s => s.nodes.every(n => n.depth === 0)), "a search folds nothing")
+// L1: the search copies still read the tree over the same shown rows
+// (Android plain() counts tree.children(key), SubSessions.kt:112), so a
+// manager keeps its sub-session count while the fold itself stays off.
+assert.strictEqual(searchCross.find(s => s.id === "group:inbox").nodes[0].row.descendants, 2,
+  "a search keeps the sub-session count")
 // L3 case 11: the cues read the cross-section tree (and the full tree
 // for Needs you, like Android reads tree.children(key)): the manager
 // keeps its visible worker's cues even though the worker lists in
@@ -326,7 +339,8 @@ assert.deepStrictEqual(needSecs[0].nodes.map(n => n.depth), [0, 0, 0], "Needs yo
 assert.deepStrictEqual(M.flatten(needSecs).filter(i => i.type === "row" && i.section.kind === "needs").map(i => i.row.id),
   ["s-nc", "s-nx", "s-n"], "flatten keeps the waiting order")
 assert.strictEqual(needSecs[0].nodes[0].collapsed, false, "Needs you carries no fold")
-// A waiting manager still annotates how many wait under it.
+// A waiting manager counts its waiting child from the full tree, like
+// Android reads tree.children(key).
 assert.strictEqual(needSecs[0].nodes.find(n => n.row.id === "s-n").row.descendants, 1)
 // A waiting worker with its own waiting child annotates it too.
 const needGrand = R({ id: "s-ng", name: "need grandchild", activity: "blocked", spawnedBy: "s-nc" })

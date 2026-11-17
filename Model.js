@@ -358,9 +358,8 @@ function groupNames(rows, layout) {
 // The fold is closed by default and opens in place; explicit folds live in
 // layout.collapsed under the sub id. The top-level sort follows the calling
 // section (`needsOrder` keeps the oldest wait first in Needs you).
-function buildTrees(rows, collapsed, order, showAll) {
+function buildTrees(rows, collapsed, order) {
   var cmp = typeof order === "function" ? order : rowOrder
-  var openAll = showAll === true
   var snap = rows.slice(), byId = {}, byHostId = {}, top = []
   for (var i = 0; i < snap.length; i++) {
     // Copy the snapshot: one section listing only children still names the
@@ -377,8 +376,6 @@ function buildTrees(rows, collapsed, order, showAll) {
     r.problemDown = 0
     r.worstDown = r.ownerState
     r.parentRow = null
-    if (openAll || r.flatSearch) r.flatSearch = true
-    else if (r.flatSearch === undefined) r.flatSearch = false
     snap[i] = r
     if (!byId[r.id]) byId[r.id] = r
     byHostId[r.host + "\0" + r.id] = r
@@ -440,19 +437,14 @@ function buildTrees(rows, collapsed, order, showAll) {
     placed[r.key] = true
   }
   for (var j = 0; j < rows.length; j++) attach(rows[j])
-  // A search hit must never sit behind a closed parent, so it lists every
-  // row in its own place (Needs you renders flat rows by itself). A stored
-  // `false` opens only the row whose key names it: children settle first
-  // so an open manager shows their own folds, then this row reads its own
-  // stored key.
+  // A stored `false` opens only the row whose key names it: children
+  // settle first so an open manager shows their own folds, then this
+  // row reads its own stored key.
   function settle(n) {
     n.children.sort(rowOrder)
     for (var w = 0; w < n.children.length; w++) settle(n.children[w])
-    if (openAll || n.flatSearch) n.treeCollapsed = false
-    else {
-      var c = collapsed[subCollapseId(n)]
-      n.treeCollapsed = c === undefined ? n.children.length > 0 : c === true
-    }
+    var c = collapsed[subCollapseId(n)]
+    n.treeCollapsed = c === undefined ? n.children.length > 0 : c === true
     var worst = n.ownerState
     for (var w = 0; w < n.children.length; w++) {
       if (STATE_ORDER[n.children[w].worstDown] < STATE_ORDER[worst]) worst = n.children[w].worstDown
@@ -476,23 +468,15 @@ function treeItems(top) {
   function shownKids(self) {
     return (self.children || []).filter(function(c) { return c.parentRow === self })
   }
-  function walkFlat(self) {
-    items.push({ row: self, depth: 0, collapsed: false, tree: false })
-    var flat = shownKids(self)
-    for (var q = 0; q < flat.length; q++) walkFlat(flat[q])
-  }
   function walk(self, depth) {
     var kids = shownKids(self)
     // A child is listed under the parent only when the parent row
     // displays its open fold; a displayed row never sits under two
     // parents, Android parity (foldSections pushes each child once,
-    // under its parent). While a search disables the fold every row
-    // lists top-level, so children never hide behind a parent.
-    var openAll = self.flatSearch === true
-    var shut = kids.length > 0 && self.treeCollapsed && !openAll
+    // under its parent).
+    var shut = kids.length > 0 && self.treeCollapsed
     items.push({ row: self, depth: depth, collapsed: shut, tree: false })
     if (shut) return
-    if (openAll) { for (var f = 0; f < kids.length; f++) walkFlat(kids[f]); return }
     for (var i = 0; i < kids.length; i++) walk(kids[i], depth + 1)
   }
   for (var t = 0; t < top.length; t++) {
@@ -542,6 +526,8 @@ function sectionNodes(list, cross) {
     }
     return treeItems(show)
   }
+  // Both callers pass the shared cross-section tree; rows on their own
+  // fold like any other tree.
   return treeItems(buildTrees(rows, {}, rowOrder))
 }
 
@@ -579,7 +565,7 @@ function sections(rows, view, layout) {
       return { row: c, depth: 0, open: true, collapsed: false, tree: false }
     })
     out.push({ id: NEEDS_YOU, kind: "needs", name: "", rows: needing, nodes: needNodes,
-               count: needing.length, collapsed: false })
+               count: needing.length, members: needing.length, collapsed: false })
   }
 
   if (view === "state") {
@@ -602,13 +588,13 @@ function sections(rows, view, layout) {
       if (collapsed[sid]) {
         var shutNodes = list.map(function(r) { return { row: r, depth: 0, collapsed: false, tree: false } })
         out.push({ id: sid, kind: "state", state: order[s], name: "", rows: list, nodes: shutNodes,
-                   count: list.length, collapsed: true })
+                   count: list.length, members: list.length, collapsed: true })
         continue
       }
       var stateNodes = sectionNodes(list, stateTree)
       if (stateNodes.length === 0) continue
       out.push({ id: sid, kind: "state", state: order[s], name: "", rows: stateNodes.map(function(n) { return n.row }), nodes: stateNodes,
-                 count: stateNodes.length, collapsed: false })
+                 count: stateNodes.length, members: list.length, collapsed: false })
     }
     return out
   }
@@ -636,21 +622,22 @@ function sections(rows, view, layout) {
     if (collapsed[gid]) {
       var shutMembers = members.map(function(r) { return { row: r, depth: 0, collapsed: false, tree: false } })
       out.push({ id: gid, kind: "group", name: names[g], inbox: isInbox, rows: members, nodes: shutMembers,
-                 count: members.length, collapsed: true })
+                 count: members.length, members: members.length, collapsed: true })
       continue
     }
     var nodes = sectionNodes(members, groupTree)
     if (nodes.length === 0) {
       // Inbox and the owner's own groups show even when empty, so a
       // session can be moved into them. A kept emptied section counts
-      // its shown rows, so it shows 0.
+      // its shown rows, so it shows 0; `members` keeps the section's
+      // own rows, so removal only targets a group with no sessions.
       if (!ownedGroup) continue
       out.push({ id: gid, kind: "group", name: names[g], inbox: isInbox, rows: [], nodes: [],
-                 count: 0, collapsed: false })
+                 count: 0, members: members.length, collapsed: false })
       continue
     }
     out.push({ id: gid, kind: "group", name: names[g], inbox: isInbox,
-               rows: nodes.map(function(n) { return n.row }), nodes: nodes,
+               rows: nodes.map(function(n) { return n.row }), nodes: nodes, members: members.length,
                count: nodes.length, collapsed: false })
   }
   return out
@@ -678,20 +665,33 @@ function foldSectionsAcross(rows, collapsed, view, noFold) {
   }
   // While a search disables the fold the tree stays per-row: children
   // never attach under a parent of another section, so every hit stays
-  // a top-level row of its own section.
+  // a top-level row of its own section. The sub-session count still
+  // reads the tree over the same shown rows (Android plain() counts
+  // tree.children(key), SubSessions.kt:112), so a manager keeps its
+  // "N sub-sessions" annotation while the fold itself stays off.
   if (noFold === true) {
+    var full = buildTrees(shown, collapsed || {}, rowOrder)
+    var counts = {}
+    for (var u = 0; u < full.length; u++) {
+      var pile = [full[u]]
+      while (pile.length > 0) {
+        var v = pile.pop()
+        counts[v.key] = v.descendants
+        for (var k = 0; k < v.children.length; k++) pile.push(v.children[k])
+      }
+    }
     for (var t = 0; t < shown.length; t++) {
       var alone = {}
       for (var f in shown[t]) alone[f] = shown[t][f]
       alone.children = []
       alone.parentRow = null
       alone.treeCollapsed = false
-      alone.flatSearch = true
+      alone.descendants = counts[shown[t].key] || 0
       byKey[shown[t].key] = alone
     }
     return { byKey: byKey, noFold: true }
   }
-  var tree = buildTrees(shown, collapsed || {}, rowOrder, false)
+  var tree = buildTrees(shown, collapsed || {}, rowOrder)
   for (var t = 0; t < tree.length; t++) {
     var stack = [tree[t]]
     while (stack.length > 0) {

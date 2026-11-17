@@ -77,6 +77,12 @@ ShellRoot {
       for (var di = 0; di < deps.nodes.length; di++) if (deps.nodes[di].row.id === "s-a1") depsManager = deps.nodes[di]
       check("Deps manager found", depsManager !== null, true)
       check("folded manager carries the fold", depsManager ? depsManager.collapsed : false, true)
+      // M1: Deps lists s-a1o and the s-a1 manager, while `members`
+      // counts only the section's own rows (the Inbox worker is the
+      // manager's section-mate here), so right-click removal must
+      // still refuse the group.
+      check("Deps owns its shown rows", deps ? deps.members : -1, 2)
+      check("Deps shows its shown rows", deps ? deps.count : -1, 2)
       check("flat list hides the worker", barPanel.items.filter(function(i) { return i.type === "row" }).map(function(i) { return i.row.id }).join(","), "s-b1,s-a1x,s-a2,s-a1o,s-a1")
       svc.toggleSub(depsManager.row)
       // Top-level roots sort newest-first (rowOrder): the orphan s-a1o
