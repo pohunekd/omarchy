@@ -76,7 +76,7 @@ assert.strictEqual(deeper[0].children[0].treeCollapsed, true)
 // of it stays top-level.
 const cyclic = M.buildTrees([R({ id: "s-x", spawnedBy: "s-y" }), R({ id: "s-y", spawnedBy: "s-x" })], {})
 assert.strictEqual(cyclic.length, 2, "a cycle stays flat")
-assert.deepStrictEqual(M.sectionNodes([R({ id: "s-x", spawnedBy: "s-y" }), R({ id: "s-y", spawnedBy: "s-x" })], {}).map(n => n.row.id), ["s-x", "s-y"])
+assert.deepStrictEqual(M.sectionNodes([R({ id: "s-x", spawnedBy: "s-y" }), R({ id: "s-y", spawnedBy: "s-x" })], { byKey: {} }).map(n => n.row.id), ["s-x", "s-y"])
 const selfed = M.buildTrees([R({ id: "s-z", spawnedBy: "s-z" })], {})
 assert.strictEqual(selfed.length, 1, "a self-parent stays top-level")
 // A parent on another host folds under the same session id.
@@ -228,7 +228,7 @@ assert.strictEqual(searchCross.find(s => s.id === "group:inbox").nodes[0].row.de
 // L3 case 11: the cues read the cross-section tree (and the full tree
 // for Needs you, like Android reads tree.children(key)): the manager
 // keeps its visible worker's cues even though the worker lists in
-// another group, and a waiting manager still counts its waiting child.
+// another group, and a waiting leaf in Needs you annotates 0.
 const cueWrk = R({ id: "s-w", name: "worker", activity: "working", spawnedBy: "s-m", group: "Deps" })
 const cueMgr = R({ id: "s-m", name: "manager", activity: "working", group: "Inbox" })
 const cueSecs = M.sections(M.applyFilters([cueMgr, cueWrk], {}), "groups", {})

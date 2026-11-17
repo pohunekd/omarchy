@@ -284,6 +284,29 @@ ShellRoot {
       check("no pohunek: missing", svc.onboarding.state, "missing")
       check("missing card shows", card ? card.visible : false, true)
 
+      console.log("group removal")
+      // A Deps worker folds under its manager in Inbox, so Deps shows
+      // 0 rows but still owns its worker: the header is kept and a
+      // right-click must refuse removal (Panel.qml gates on members).
+      svc.applySnapshot(JSON.stringify({ installed: true, hosts: [
+        { target: "local", label: "workstation", local: true, reachable: true, notifications: [], sessions: [
+          session("s-g1", { group: "Inbox", activity: "working" }),
+          session("s-g2", { group: "Deps", activity: "working", spawned_by: { session_id: "s-g1", daemon_id: "d-1" } }) ] } ] }), 0)
+      svc.saveLayout(Object.assign({}, svc.layout, { groups: ["Deps"] }))
+      var keptDeps = null
+      for (var kd = 0; kd < barPanel.sectionList.length; kd++) if (barPanel.sectionList[kd].id === "group:deps") keptDeps = barPanel.sectionList[kd]
+      check("emptied Deps is kept", keptDeps !== null, true)
+      check("kept Deps shows 0", keptDeps ? keptDeps.count : -1, 0)
+      check("kept Deps still owns its worker", keptDeps ? keptDeps.members : -1, 1)
+      svc.removeGroup("Deps")
+      var keptAfter = null
+      for (var ka = 0; ka < barPanel.sectionList.length; ka++) if (barPanel.sectionList[ka].id === "group:deps") keptAfter = barPanel.sectionList[ka]
+      check("direct removal still drops an owned group", keptAfter === null, true)
+      var groupsBefore = (svc.layout.groups || []).slice()
+      var gated = keptDeps && keptDeps.kind === "group" && !keptDeps.inbox && keptDeps.members === 0
+      check("right-click refuses a group with members", gated, false)
+      check("layout untouched by the refused click", (svc.layout.groups || []).join(","), groupsBefore.join(","))
+
       console.log(failures === 0 ? "ALL OK" : failures + " FAILED")
     }
 

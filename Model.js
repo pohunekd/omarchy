@@ -526,9 +526,7 @@ function sectionNodes(list, cross) {
     }
     return treeItems(show)
   }
-  // Both callers pass the shared cross-section tree; rows on their own
-  // fold like any other tree.
-  return treeItems(buildTrees(rows, {}, rowOrder))
+  throw new Error("sectionNodes requires the shared cross-section tree")
 }
 
 function sections(rows, view, layout) {

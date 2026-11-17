@@ -107,9 +107,8 @@ needs you. This widget puts all of it in the bar you already look at:
   manager wherever the manager is listed, whatever section either of
   them is in: a section that only the fold emptied is dropped, except
   Inbox and your own groups, which keep their header and a 0 count.
-  A header counts the rows it shows; a kept header keeps its own-member
-  count next to it, and right-click removal only offers groups with no
-  members. A group whose only sessions wait in Needs you stays dropped
+  A header counts the rows it shows; right-click removal only offers a
+  group with no sessions of its own. A group whose only sessions wait in Needs you stays dropped
   unless it is Inbox or one of your own groups. A folded parent carries
   the worst state of its hidden rows: its dot and fold marker cue when
   a worker under it broke.

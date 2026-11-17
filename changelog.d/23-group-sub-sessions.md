@@ -8,6 +8,6 @@ sub-session count; and a folded parent cues the worst state of its hidden rows.
 A sub-session whose manager is gone stays top-level. In both My groups and By state
 a worker folds under its manager across sections: a section that only the fold
 emptied is dropped, except Inbox and the owner's own groups, which keep their header
-and a 0 count; a kept header keeps its own-member count next to the shown count and
-right-click removal only offers groups with no members. A group whose only sessions
+and a 0 count; a header counts the rows it shows and right-click removal only
+offers a group with no sessions of its own. A group whose only sessions
 wait in Needs you is dropped unless it is Inbox or one of the owner's own groups.
