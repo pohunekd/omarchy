@@ -123,6 +123,7 @@
  "state.problem": "Problém s během",
  "state.nostate": "Bez stavu agenta",
  "state.ended": "Ukončeno",
+ "subSessions": "pod-relací",
  "subagents": {
   "one": "%1 subagent",
   "few": "%1 subagenti",

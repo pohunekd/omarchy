@@ -47,8 +47,9 @@ assert.strictEqual(M.parentIdOf({ spawnedBy: "bad id" }), "")
 assert.strictEqual(M.parentIdOf({}), "")
 
 const R = (o) => { const s = S(o); const parentId = M.parentIdOf({ spawnedBy: s.spawnedBy, spawned_by: s.spawned_by });
-  return { ...s, group: "Inbox", ownerState: s.activity === "blocked" ? "needs" : "working",
-    parentId: parentId, host: "local", key: "local/" + s.id } }
+  const host = s.host || "local"
+  return { ...s, group: "Inbox", ownerState: M.ownerState({ ...s, state: "running", openAttention: false }, false, 0, NOW, T),
+    parentId: parentId, host: host, key: host + "/" + s.id } }
 const manager = R({ id: "s-m", name: "manager", activity: "working" })
 const workerA = R({ id: "s-w1", name: "worker one", activity: "working", spawnedBy: "s-m" })
 const workerB = R({ id: "s-w2", name: "worker two", activity: "idle", spawnedBy: "s-m" })
@@ -72,10 +73,10 @@ const deeper = M.buildTrees([manager, workerA, workerB, grand, orphan],
 assert.strictEqual(deeper[0].children[0].treeCollapsed, true)
 // A loop never hides a row: every link of a cycle is cut and each row
 // of it stays top-level.
-const cyclic = M.buildTrees([S({ id: "s-x", spawnedBy: "s-y" }), S({ id: "s-y", spawnedBy: "s-x" })], {})
+const cyclic = M.buildTrees([R({ id: "s-x", spawnedBy: "s-y" }), R({ id: "s-y", spawnedBy: "s-x" })], {})
 assert.strictEqual(cyclic.length, 2, "a cycle stays flat")
-assert.deepStrictEqual(M.sectionNodes([S({ id: "s-x", spawnedBy: "s-y" }), S({ id: "s-y", spawnedBy: "s-x" })], {}).map(n => n.row.id), ["s-x", "s-y"])
-const selfed = M.buildTrees([S({ id: "s-z", spawnedBy: "s-z" })], {})
+assert.deepStrictEqual(M.sectionNodes([R({ id: "s-x", spawnedBy: "s-y" }), R({ id: "s-y", spawnedBy: "s-x" })], {}).map(n => n.row.id), ["s-x", "s-y"])
+const selfed = M.buildTrees([R({ id: "s-z", spawnedBy: "s-z" })], {})
 assert.strictEqual(selfed.length, 1, "a self-parent stays top-level")
 // A parent on another host folds under the same session id.
 const remote = M.buildTrees([{ ...manager, host: "local", key: "local/s-m" },
@@ -100,19 +101,85 @@ const openSecs = M.sections(treeFiltered, "groups",
 const openInbox = openSecs.find(s => s.name === "Inbox")
 assert.deepStrictEqual(openInbox.nodes.map(n => n.row.id), ["s-m", "s-w1", "s-g", "s-w2", "s-o"], "parent before children")
 assert.deepStrictEqual(openInbox.nodes.map(n => n.depth), [0, 1, 2, 1, 0])
-// Needs you keeps its own order and still folds sub-sessions after it.
+// Needs you never folds (Android folds group sections only): every waiting
+// session lists in its own place with its sub-session count, with the
+// oldest wait first all the way to the rendered rows.
 const needy = R({ id: "s-n", name: "need", activity: "blocked" })
 const needyChild = R({ id: "s-nc", name: "need child", activity: "blocked", spawnedBy: "s-n" })
-const needFiltered = M.applyFilters([manager, workerA, needy, needyChild], {})
+const other = R({ id: "s-r", name: "other", activity: "working" })
+const needFiltered = M.applyFilters([other, needy, needyChild], {})
 const needSecs = M.sections(needFiltered, "groups", {})
 assert.strictEqual(needSecs[0].id, "needs-you")
-assert.deepStrictEqual(needSecs[0].nodes.map(n => n.row.id), ["s-n"],
-  "a folded Needs-you section lists the parent row only")
-const needOpen = M.sections(needFiltered, "groups", { collapsed: { [M.subCollapseId(needy)]: false } })
-assert.deepStrictEqual(needOpen[0].nodes.map(n => n.row.id), ["s-n", "s-nc"])
+assert.deepStrictEqual(needSecs[0].nodes.map(n => n.row.id), ["s-n", "s-nc"],
+  "a Needs-you section lists parent and child in their own places")
+assert.deepStrictEqual(M.flatten(needSecs).filter(i => i.type === "row" && i.section.kind === "needs").map(i => i.row.id), ["s-n", "s-nc"])
+assert.strictEqual(needSecs[0].nodes[0].collapsed, false, "Needs you carries no fold")
+// A waiting child counts on its parent, not behind a fold.
+assert.strictEqual(needSecs[0].nodes[0].row.needsDown, 1)
+assert.strictEqual(needSecs[0].nodes[0].row.descendants, 1)
+// A grandchild's attention reaches the folded manager through the middle.
+assert.strictEqual(deeper[0].worstDown, deeper[0].children[0].worstDown,
+  "a middle row hands the subtree attention up")
 // subOpenMap stores the explicit open; toggling back folds again.
+// Stale `sub:` entries of vanished sessions are forgotten, while the
+// union of the live section keys keeps a Needs-you copy's fold too: the
+// same `sub:` key is live in both sections and stays stored either way.
 assert.deepStrictEqual(M.subOpenMap({}, manager, true), { [M.subCollapseId(manager)]: false })
 assert.deepStrictEqual(M.subOpenMap({ [M.subCollapseId(manager)]: false }, manager, false), { [M.subCollapseId(manager)]: true })
+function liveUnion(lists) {
+  var perSection = {}
+  for (var li = 0; li < lists.length; li++) {
+    var keys = M.liveSubKeys(M.buildTrees(lists[li], {}))
+    for (var k in keys) perSection[k] = true
+  }
+  return perSection
+}
+const pruned = M.subOpenMap({ "group:deps": true, [M.subCollapseId(manager)]: true }, manager, false,
+  liveUnion([[manager]]))
+assert.deepStrictEqual(pruned, { "group:deps": true, [M.subCollapseId(manager)]: true })
+const prunedGone = M.subOpenMap({ "group:deps": true, "sub:gone/s-x": true }, manager, false,
+  liveUnion([[manager]]))
+assert.deepStrictEqual(prunedGone, { "group:deps": true, [M.subCollapseId(manager)]: true },
+  "stale sub folds of vanished sessions are forgotten")
+// The top-level sort follows the section: Needs you keeps the oldest wait
+// first in the nodes and the flattened rows, not in `rows` only.
+const oldWait = R({ id: "s-old", name: "old", activity: "blocked", updatedAt: ago(10) })
+oldWait.waitingSince = NOW - 3000 * 1000
+const newWait = R({ id: "s-new", name: "new", activity: "blocked", updatedAt: ago(5000) })
+newWait.waitingSince = NOW - 100 * 1000
+const waitSecs = M.sections(M.applyFilters([newWait, oldWait], {}), "groups", {})
+assert.deepStrictEqual(waitSecs[0].nodes.map(n => n.row.id), ["s-old", "s-new"], "nodes keep the wait order")
+assert.deepStrictEqual(M.flatten(waitSecs).filter(i => i.type === "row").map(i => i.row.id), ["s-old", "s-new"])
+// A row whose session id appears on two targets renders twice; each copy
+// folds under its own manager.
+const dupA = { ...manager, host: "local", key: "local/s-m" }
+const dupB = { ...manager, host: "air", key: "air/s-m" }
+const dupWa = { ...workerA, host: "local", key: "local/s-w1", parentId: "s-m" }
+const dupWb = { ...workerA, host: "air", key: "air/s-w1", parentId: "s-m" }
+const dupTree = M.buildTrees([dupA, dupB, dupWa, dupWb], {})
+assert.strictEqual(dupTree.length, 2, "both copies of a duplicated id render")
+assert.ok(dupTree.every(t => t.children.length === 1 && t.children[0].host === t.host),
+  "each copy folds under its own host's manager")
+// A tail into a cycle attaches normally; only the loop links stay flat.
+const tail = M.buildTrees([R({ id: "s-a", spawnedBy: "s-c" }), R({ id: "s-b", spawnedBy: "s-c" }),
+  R({ id: "s-c", spawnedBy: "s-a" }), R({ id: "s-d", spawnedBy: "s-a" })], {})
+assert.deepStrictEqual(tail.map(r => r.id).sort(), ["s-a", "s-c"], "the cycle stays flat")
+assert.deepStrictEqual(tail.find(r => r.id === "s-a").children.map(c => c.id), ["s-d"], "a tail into the cycle attaches")
+assert.deepStrictEqual(tail.find(r => r.id === "s-c").children.map(c => c.id), ["s-b"], "a tail into the cycle attaches")
+// A search opens every fold, so a hit never sits behind a closed parent.
+const searchSecs = M.sections(treeFiltered, "groups", { searchOpen: true })
+assert.deepStrictEqual(searchSecs.find(s => s.name === "Inbox").nodes.map(n => n.row.id),
+  ["s-m", "s-w1", "s-g", "s-w2", "s-o"], "a query lists every match in its own place")
+// A folded parent carries the attention of its subtree.
+assert.strictEqual(tree[0].worstDown, "working")
+const worry = M.buildTrees([R({ id: "s-p", name: "boss", activity: "working" }),
+  R({ id: "s-q", name: "helper", activity: "blocked", spawnedBy: "s-p" })], {})
+assert.strictEqual(worry[0].worstDown, "needs")
+assert.strictEqual(worry[0].needsDown, 1)
+const broke = M.buildTrees([R({ id: "s-p", name: "boss", activity: "working" }),
+  R({ id: "s-u", name: "ok", activity: "working", runtimeState: "conflict", spawnedBy: "s-p" })], {})
+assert.strictEqual(broke[0].worstDown, "problem")
+assert.strictEqual(broke[0].problemDown, 1)
 
 // groups
 assert.strictEqual(M.groupOf(S({ group: null })), "Inbox")

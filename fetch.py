@@ -123,7 +123,6 @@ def slim_session(raw, host):
         "project": clean(raw.get("project_label") or raw.get("project_id"), 80),
         "projectId": clean(raw.get("project_id"), 120),
         "spawnedBy": parent,
-        "children": raw["children"] if isinstance(raw.get("children"), int) and raw["children"] >= 0 else 0,
         "branch": clean(raw.get("branch"), 120),
         "worktree": clean(raw.get("worktree_path"), 400),
         "group": clean(meta.get("companion.group"), 120) if "companion.group" in meta else None,

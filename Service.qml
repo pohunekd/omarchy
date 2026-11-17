@@ -260,9 +260,21 @@ Item {
   // switches between the stored open and the stored closed states.
   function toggleSub(row) {
     if (!row) return
-    var collapsed = layout.collapsed || {}
+    var c = Object.assign({}, layout.collapsed || {})
+    // The panel lists Needs-you rows flat (Android parity), so a Needs-you
+    // copy of a folded parent must not steal the group's open row when
+    // the fold map is pruned: rebuild every section the panel shows from
+    // the full snapshot (Needs you is its own flat list) and take the
+    // union of their live `sub:` keys.
+    var perSection = {}
+    var shown = Model.sections(Model.applyFilters(rows, {}), "groups", {})
+      .concat(Model.sections(Model.applyFilters(rows, {}), "state", {}))
+    for (var s = 0; s < shown.length; s++) {
+      var keys = Model.liveSubKeys(Model.buildTrees(shown[s].rows || [], c))
+      for (var k in keys) perSection[k] = true
+    }
     saveLayout(Object.assign({}, layout,
-      { collapsed: Model.subOpenMap(collapsed, row, row.treeCollapsed === true) }))
+      { collapsed: Model.subOpenMap(c, row, row.treeCollapsed === true, perSection) }))
   }
   function addGroup(name) {
     var checked = Model.checkGroupName(name)

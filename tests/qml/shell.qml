@@ -96,7 +96,7 @@ ShellRoot {
       console.log("view")
       svc.setView("state")
       check("state view sections", barPanel.sectionList.map(function(s) { return s.id }).join(","), "needs-you,state:working,state:idle")
-      check("state view folds too", barPanel.sectionList[1].nodes.map(function(n) { return n.row.id }).join(","), "s-b1,s-a1,s-a1o")
+      check("state view folds too", barPanel.sectionList[1].nodes.map(function(n) { return n.row.id }).join(","), "s-a1,s-a1o")
       svc.setView("groups")
 
       console.log("sheets")
@@ -186,7 +186,8 @@ ShellRoot {
       barPanel.activate()
       check("Enter opens a folded manager", barPanel.items.length, openedBefore + 1)
       check("Enter lands on the manager row", barPanel.currentRow() ? barPanel.currentRow().id : "", "s-a1")
-      // Row 5 is the worker: the left key folds it back under the manager.
+      // The left key helper folds a sub-session back under its manager and
+      // lands the cursor on the manager; on an open parent it folds itself.
       barPanel.cursor = 5
       var workerRow = barPanel.currentRow()
       check("cursor on the worker", workerRow ? workerRow.id : "", "s-a1w")
@@ -194,8 +195,20 @@ ShellRoot {
       for (var ei = 0; ei < barPanel.items.length; ei++)
         if (barPanel.items[ei].type === "row" && barPanel.items[ei].row.id === "s-a1w") workerEntry = barPanel.items[ei]
       check("worker can fold back", workerEntry !== null && (workerEntry.depth || 0) > 0, true)
-      svc.toggleSub(workerEntry.row.parentRow || workerEntry.row)
+      check("foldBack folds to the manager", barPanel.foldBack(workerEntry), true)
+      check("foldBack lands on the manager", barPanel.currentRow() ? barPanel.currentRow().id : "", "s-a1")
       check("folded back, worker hidden again", barPanel.items.length, openedBefore)
+      var managerEntry = null
+      for (var mi = 0; mi < barPanel.items.length; mi++)
+        if (barPanel.items[mi].type === "row" && barPanel.items[mi].row.id === "s-a1") managerEntry = barPanel.items[mi]
+      check("foldBack folds an open parent itself", barPanel.foldBack(managerEntry), false)
+      barPanel.activate()
+      var managerEntryOpen = null
+      for (var mo = 0; mo < barPanel.items.length; mo++)
+        if (barPanel.items[mo].type === "row" && barPanel.items[mo].row.id === "s-a1") managerEntryOpen = barPanel.items[mo]
+      check("foldBack folds an open parent itself", barPanel.foldBack(managerEntryOpen), true)
+      check("foldBack leaves the cursor on the parent", barPanel.currentRow() ? barPanel.currentRow().id : "", "s-a1")
+      check("parent folded again", barPanel.items.length, openedBefore)
 
       console.log("get started card")
       var card = findAll(barPanel.panelContent, function(i) { try { return i.isOnboardCard === true } catch (e) { return false } })[0]

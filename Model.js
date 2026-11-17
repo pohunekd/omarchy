@@ -165,15 +165,40 @@ function parentIdOf(s) {
 }
 
 function subCollapseId(row) { return "sub:" + row.key }
+// A group fold and a sub-session fold share the stored map, but under
+// different prefixes: group or state section ids never start with `sub:`.
 // Folded parents hide their count of sub-sessions under one row; the
 // stored layout state is the ground truth (a folded id lists `true`,
 // a missing id lists the default, open here), so an explicit `false`
 // is the way an opener stays open.
-function subOpenMap(collapsed, row, open) {
+function pruneFoldState(saved, liveKeys, keepStale) {
+  var out = {}
+  for (var id in saved) {
+    if (Object.prototype.hasOwnProperty.call(saved, id)) {
+      if (id.indexOf("sub:") !== 0) { out[id] = saved[id]; continue }
+      if (liveKeys[id] || keepStale) out[id] = saved[id]
+    }
+  }
+  return out
+}
+function liveSubKeys(treeTop) {
+  var live = {}
+  function walk(row) {
+    live[subCollapseId(row)] = true
+    for (var i = 0; i < row.children.length; i++) walk(row.children[i])
+  }
+  for (var t = 0; t < treeTop.length; t++) walk(treeTop[t])
+  return live
+}
+function subOpenMap(collapsed, row, open, liveKeys) {
   var c = Object.assign({}, collapsed || {})
   var id = subCollapseId(row)
   if (open) { if (c[id] !== false) c[id] = false }
   else if (c[id] !== true) c[id] = true
+  // Fold state only grows while managers spawn workers daily: forget the
+  // `sub:` entries of rows that are gone from the snapshot, so the layout
+  // file stays bounded.
+  if (liveKeys) return pruneFoldState(c, liveKeys, false)
   return c
 }
 // --- Snapshot → rows -------------------------------------------------------
@@ -226,7 +251,6 @@ function buildRows(hosts, clocks, now, thresholdMs) {
         cwd: clip(s.cwd, 400),
         worktree: clip(s.worktree, 400),
         parentId: parentIdOf(s),
-        childCount: typeof s.children === "number" && s.children >= 0 ? Math.floor(s.children) : 0,
         badge: workBadge(s.work),
         workUrl: safeUrl(s.work && s.work.url),
         role: clip(s.work && s.work.role, 60),
@@ -323,14 +347,19 @@ function groupNames(rows, layout) {
 }
 
 // Sub-session trees. A row whose `spawned_by` names a row that is present
-// folds under it (a parent on another host counts: sessions are merged
-// across hosts, and a session id is unique on its own). A self-parent and
-// an unknown parent (an orphan) stay top-level rows. A chain that loops
-// back on itself can never anchor, so each link of a cycle is cut in turn
-// and every row of it stays top-level. The fold is closed by default and
-// opens in place; explicit folds live in layout.collapsed under the sub id.
-function buildTrees(rows, collapsed) {
-  var snap = rows.slice(), byId = {}, top = []
+// folds under it. The manager resolves on the same host first: an identical
+// session id can reach on two targets, and each copy then folds under its
+// own manager instead of vanishing. A parent on another host still counts
+// (sessions are merged across hosts), a self-parent and an unknown parent
+// (an orphan) stay top-level rows. A chain that loops back on itself can
+// never anchor: the loop detection walks the row's own chain and cuts only
+// the links of that loop, so a tail into a cycle still attaches normally.
+// The fold is closed by default and opens in place; explicit folds live in
+// layout.collapsed under the sub id. The top-level sort follows the calling
+// section (`needsOrder` keeps the oldest wait first in Needs you).
+function buildTrees(rows, collapsed, order) {
+  var cmp = typeof order === "function" ? order : rowOrder
+  var snap = rows.slice(), byId = {}, byHostId = {}, top = []
   for (var i = 0; i < snap.length; i++) {
     // Copy the snapshot: one section listing only children still names the
     // parent, and copying keeps one section from rewriting another.
@@ -340,77 +369,110 @@ function buildTrees(rows, collapsed) {
     if (r.parentId === undefined) r.parentId = parentIdOf(r)
     r.children = []
     r.descendants = 0
+    // Pending counts read the hidden rows only: a folded title shows how
+    // many of its sub-sessions need the owner or broke, not itself.
+    r.needsDown = 0
+    r.problemDown = 0
+    r.worstDown = r.ownerState
     r.parentRow = null
-    if (r.flat === undefined) r.flat = false
+    if (r.flatNeeds === undefined) r.flatNeeds = false
+    if (r.flatSearch === undefined) r.flatSearch = false
     snap[i] = r
     if (!byId[r.id]) byId[r.id] = r
+    byHostId[r.host + "\0" + r.id] = r
   }
   rows = snap
+  // The manager for a row: same host first, then the first match. The
+  // copy map is keyed by row key, so a duplicated session id on two
+  // targets lists both copies instead of dropping one.
+  function findParent(r) {
+    if (!r.parentId || r.parentId === r.id) return null
+    return byHostId[r.host + "\0" + r.parentId] || byId[r.parentId] || null
+  }
   // Attach rows to their parents. A row joins only once its parent is
   // placed, so the parent chain anchors head-first. Unknown parents
-  // (orphans) and self-parents stay top-level; a chain that loops back on
-  // itself can never anchor, so every link of a cycle is cut and each row
-  // of it stays top-level.
+  // (orphans) and self-parents stay top-level; a chain that loops back
+  // on itself cuts only the links of that loop, so every row of it stays
+  // top-level while a tail into the loop attaches normally.
   var placed = {}
   function attach(r) {
-    if (placed[r.id]) return
-    if (!r.parentId || r.parentId === r.id) { r.parentId = ""; placed[r.id] = true; top.push(r); return }
-    var p = byId[r.parentId] || null
-    if (!p || p === r) { r.parentId = ""; placed[r.id] = true; top.push(r); return }
+    if (placed[r.key]) return
+    var p = findParent(r)
+    if (!p || p === r) { r.parentId = ""; placed[r.key] = true; top.push(r); return }
     // Loop back: the parent chain returns to this row (or repeats a row),
-    // so neither link may hide the other.
+    // so the links of that loop cannot nest. Cut exactly the loop links;
+    // `seen` holds the chain from this row up, `loop` then marks the rows
+    // that form the cycle back to this row.
     var seen = {}
     seen[r.id] = true
+    var chain = [r]
     var bad = false
-    for (var q = p; q; q = q.parentRow || byId[q.parentId] || null) {
-      if (q === r || seen[q.id]) { bad = true; break }
-      seen[q.id] = true
+    for (var q = p; q; q = q.parentRow || findParent(q)) {
+      if (q === r || seen[q.id + "\0" + q.key]) { bad = true; break }
+      seen[q.id + "\0" + q.key] = true
+      chain.push(q)
       if (q.parentRow) continue
-      if (!q.parentId || q.parentId === q.id || !byId[q.parentId]) break
+      if (!findParent(q)) break
     }
     if (bad) {
-      var cut = r
-      while (cut && !placed[cut.id]) {
-        cut.parentId = ""
-        placed[cut.id] = true
-        top.push(cut)
-        var nxt = null
-        for (var w = 0; w < rows.length; w++) {
-          if (!placed[rows[w].id] && rows[w].parentId === cut.id) { nxt = rows[w]; break }
+      var loop = {}
+      for (var l = 0; l < chain.length; l++) loop[chain[l].key] = true
+      for (var m = 0; m < chain.length; m++)
+        if (!placed[chain[m].key] && loop[chain[m].key]) {
+          chain[m].parentId = ""
+          placed[chain[m].key] = true
+          top.push(chain[m])
         }
-        cut = nxt
-      }
+      if (!placed[r.key]) { r.parentId = ""; placed[r.key] = true; top.push(r) }
       return
     }
-    if (!placed[p.id]) attach(p)
-    if (!placed[p.id]) { r.parentId = ""; placed[r.id] = true; top.push(r); return }
-    for (var a = p; a; a = a.parentRow) a.descendants++
+    if (!placed[p.key]) attach(p)
+    if (!placed[p.key]) { r.parentId = ""; placed[r.key] = true; top.push(r); return }
+    for (var a = p; a; a = a.parentRow) {
+      a.descendants++
+      if (r.ownerState === "needs") a.needsDown++
+      if (r.ownerState === "problem") a.problemDown++
+    }
     r.parentRow = p
     p.children.push(r)
-    placed[r.id] = true
+    placed[r.key] = true
   }
   for (var j = 0; j < rows.length; j++) attach(rows[j])
-  for (var k = 0; k < rows.length; k++) {
-    var n = rows[k]
+  // A folded Needs-you marker would hide a waiting session, and a search
+  // hit must never sit behind a closed parent, so both list every row in
+  // its own place. A stored `false` opens only the row whose key names
+  // it: children settle first so an open manager shows their own folds,
+  // then this row reads its own stored key.
+  function settle(n) {
     n.children.sort(rowOrder)
-    if (n.flat) n.treeCollapsed = false
+    for (var w = 0; w < n.children.length; w++) settle(n.children[w])
+    if (n.flatNeeds || n.flatSearch) n.treeCollapsed = false
     else {
       var c = collapsed[subCollapseId(n)]
       n.treeCollapsed = c === undefined ? n.children.length > 0 : c === true
     }
+    var worst = n.ownerState
+    for (var w = 0; w < n.children.length; w++) {
+      if (STATE_ORDER[n.children[w].worstDown] < STATE_ORDER[worst]) worst = n.children[w].worstDown
+    }
+    n.worstDown = worst
   }
-  top.sort(rowOrder)
+  for (var k = 0; k < top.length; k++) settle(top[k])
+  top.sort(cmp)
   return top
 }
 
 // A visible tree item: the parent row, then its open children recursively.
-// A collapsed parent still lists its row, with the folded count.
+// A collapsed parent still lists its row, with the folded count. `tree`
+// marks a section that holds a tree: only those rows reserve the fold
+// marker slot, so a flat section keeps the rows where they were on main.
 function treeItems(top) {
   var items = []
+  var tree = top.some(function(row) { return row.children.length > 0 })
   function walk(row, depth) {
     var kids = row.children.filter(function(c) { return c.parentRow === row })
     var shut = kids.length > 0 && row.treeCollapsed
-    items.push({ row: row, depth: depth, collapsed: shut })
+    items.push({ row: row, depth: depth, collapsed: shut, tree: tree })
     if (shut) return
     for (var i = 0; i < kids.length; i++) walk(kids[i], depth + 1)
   }
@@ -418,18 +480,32 @@ function treeItems(top) {
   return items
 }
 
-function sectionNodes(list, collapsed) {
-  return treeItems(buildTrees(list, collapsed || {}))
+function sectionNodes(list, collapsed, order, expand) {
+  var rows = (list || []).map(function(r) {
+    var c = {}
+    for (var f in r) c[f] = r[f]
+    if (expand === "needs") c.flatNeeds = true
+    else if (expand === "search") c.flatSearch = true
+    return c
+  })
+  return treeItems(buildTrees(rows, collapsed || {}, order))
 }
 
 function sections(rows, view, layout) {
   var collapsed = (layout && layout.collapsed) || {}
+  // A query opens every fold, like the Android companion lists every
+  // match in its own place when the query is not blank: a hit never
+  // sits behind a closed parent.
+  var flatSearch = !!((layout && layout.searchOpen) || (layout && layout.query))
+  var expand = flatSearch ? "search" : ""
   var needing = [], rest = []
   for (var i = 0; i < rows.length; i++) (rows[i].ownerState === "needs" ? needing : rest).push(rows[i])
   needing.sort(needsOrder)
   var out = []
+  // Needs you never folds (Android folds group sections only): every
+  // waiting session lists in its own place, with its sub-session count.
   if (needing.length > 0)
-    out.push({ id: NEEDS_YOU, kind: "needs", name: "", rows: needing, nodes: sectionNodes(needing, collapsed),
+    out.push({ id: NEEDS_YOU, kind: "needs", name: "", rows: needing, nodes: sectionNodes(needing, collapsed, needsOrder, expand || "needs"),
                count: needing.length, collapsed: false })
 
   if (view === "state") {
@@ -438,7 +514,7 @@ function sections(rows, view, layout) {
       var list = rest.filter(function(r) { return r.ownerState === order[s] }).sort(rowOrder)
       if (list.length === 0) continue
       var sid = "state:" + order[s]
-      out.push({ id: sid, kind: "state", state: order[s], name: "", rows: list, nodes: sectionNodes(list, collapsed),
+      out.push({ id: sid, kind: "state", state: order[s], name: "", rows: list, nodes: sectionNodes(list, collapsed, rowOrder, expand),
                  count: list.length, collapsed: !!collapsed[sid] })
     }
     return out
@@ -451,7 +527,7 @@ function sections(rows, view, layout) {
     var isInbox = sameGroup(names[g], INBOX)
     // Inbox and the owner's own groups show even when empty, so a session
     // can be moved into them.
-    out.push({ id: gid, kind: "group", name: names[g], inbox: isInbox, rows: members, nodes: sectionNodes(members, collapsed),
+    out.push({ id: gid, kind: "group", name: names[g], inbox: isInbox, rows: members, nodes: sectionNodes(members, collapsed, rowOrder, expand),
                count: members.length, collapsed: !!collapsed[gid] })
   }
   return out
@@ -467,6 +543,7 @@ function flatten(sectionList) {
     var nodes = sec.nodes || (sec.rows || []).map(function(r) { return { row: r, depth: 0, open: true, collapsed: false } })
     for (var j = 0; j < nodes.length; j++) {
       var n = nodes[j]
+      n.row.treeHere = !!n.tree
       items.push({ type: "row", row: n.row, depth: n.depth, node: n, section: sec, key: "r:" + n.row.key })
     }
   }
@@ -666,7 +743,7 @@ if (typeof module !== "undefined") {
     groupNames: groupNames, ageParts: ageParts, pushRecent: pushRecent, filterCount: filterCount,
     fuzzyScore: fuzzyScore, fuzzyFilter: fuzzyFilter, FUZZY_THRESHOLD: FUZZY_THRESHOLD,
     onboardAgents: onboardAgents, onboardingCard: onboardingCard, onboardingRecordLaunched: onboardingRecordLaunched,
-    parentIdOf: parentIdOf, subCollapseId: subCollapseId, subOpenMap: subOpenMap, buildTrees: buildTrees, sectionNodes: sectionNodes,
+    parentIdOf: parentIdOf, subCollapseId: subCollapseId, subOpenMap: subOpenMap, pruneFoldState: pruneFoldState, liveSubKeys: liveSubKeys, buildTrees: buildTrees, sectionNodes: sectionNodes,
     INBOX: INBOX, NEEDS_YOU: NEEDS_YOU
   }
 }

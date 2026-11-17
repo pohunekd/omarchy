@@ -94,12 +94,17 @@ needs you. This widget puts all of it in the bar you already look at:
   each row with its host chip. A machine that drops off keeps its rows, dimmed.
 - **⌨ A real terminal, one click away.** Enter or a click attaches
   (`pohunek attach`); `Ctrl+]` detaches and the agent keeps working. A folded
-  manager opens in place instead; `←` folds it back.
+  manager opens in place instead; `←` on a sub-session folds its manager
+  and lands the cursor on it, `←` on an open parent folds it.
 - **🗂 Your groups, everywhere.** Groups live in the session's
   `companion.group` metadata, so they are the same groups the pohunek desktop and
   Android companions show. Sessions a manager spawned fold under it with
-  a count and open in place; a sub-session whose manager is gone stays
-  a top-level row.
+  a count and open in place; everything waiting for you stays in its own
+  row in Needs you, with its sub-session count, and a search opens every
+  fold, so a hit never sits behind a closed parent. A sub-session whose
+  manager is gone stays a top-level row. A folded parent carries the worst
+  state of its hidden rows: its dot and fold marker cue when a worker under
+  it waits for you or broke.
 - **🚀 New sessions without the CLI.** Pick a host, a project and an agent (with
   fuzzy search when the lists get long), write the first prompt, Ctrl+Enter.
 
@@ -108,7 +113,7 @@ needs you. This widget puts all of it in the bar you already look at:
 | | | |
 |:-:|:-:|:-:|
 | <img src="docs/list.png" width="260" alt="My groups view" /> | <img src="docs/state.png" width="260" alt="By state view" /> | <img src="docs/actions.png" width="260" alt="Row actions sheet" /> |
-| **My groups.** Needs you on top, then Inbox and your own groups. Each row: state, agent, project, Work link (`GH PR #1412`), branch, host. A manager's workers fold under it with a count and open in place. | **By state.** Needs you, Working, Idle, Runtime problem. Ended sessions stay hidden until you pick them. | **Actions** (⋮, right click or →): open terminal, details, rename, new session here, move to group, open link, diff, stop, remove, resume. |
+| **My groups.** Needs you on top, then Inbox and your own groups. Each row: state, agent, project, Work link (`GH PR #1412`), branch, host. A manager's workers fold under it with a count and open in place; Needs you never folds. | **By state.** Needs you, Working, Idle, Runtime problem. Ended sessions stay hidden until you pick them. | **Actions** (⋮, right click or →): open terminal, details, rename, new session here, move to group, open link, diff, stop, remove, resume. |
 | <img src="docs/new.png" width="260" alt="New session form" /> | <img src="docs/help.png" width="260" alt="Help page" /> | <img src="docs/hosts.png" width="260" alt="Hosts page" /> |
 | **New session.** Host, project, agent, name, branch (a fresh worktree), first prompt. Long lists turn into a fuzzy search select. | **Help** (`?`). Every key in the panel and, most importantly, the ones inside an attached terminal. | **Hosts.** Every pohunek daemon you can reach, the network that carries them, and your Omarchy machines that do not run pohunek yet. |
 
