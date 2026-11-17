@@ -48,7 +48,8 @@ assert.strictEqual(M.parentIdOf({}), "")
 
 const R = (o) => { const s = S(o); const parentId = M.parentIdOf({ spawnedBy: s.spawnedBy, spawned_by: s.spawned_by });
   const host = s.host || "local"
-  return { ...s, group: "Inbox", ownerState: M.ownerState({ ...s, state: "running", openAttention: false }, false, 0, NOW, T),
+  const group = s.group === undefined ? "Inbox" : s.group
+  return { ...s, group: group, ownerState: M.ownerState({ ...s, state: "running", openAttention: false }, false, 0, NOW, T),
     parentId: parentId, host: host, key: host + "/" + s.id } }
 const manager = R({ id: "s-m", name: "manager", activity: "working" })
 const workerA = R({ id: "s-w1", name: "worker one", activity: "working", spawnedBy: "s-m" })
@@ -83,11 +84,11 @@ const remote = M.buildTrees([{ ...manager, host: "local", key: "local/s-m" },
   { ...workerA, host: "air", key: "air/s-w1" }], {})
 assert.strictEqual(remote.length, 1, "cross-host parent merges")
 // A section lists the folded rows inside the parent's group with the depth.
-const treeFiltered = M.applyFilters([R({ id: "s-m", name: "manager", activity: "working" }),
-  R({ id: "s-w1", name: "worker one", activity: "working", spawnedBy: "s-m" }),
-  R({ id: "s-w2", name: "worker two", activity: "idle", spawnedBy: "s-m" }),
-  R({ id: "s-g", name: "grandchild", activity: "working", spawnedBy: "s-w1" }),
-  R({ id: "s-o", name: "orphan", activity: "working", spawnedBy: "s-gone" })], {})
+const treeFiltered = M.applyFilters([R({ id: "s-m", name: "manager", activity: "working", group: "Inbox", parentId: "" }),
+  R({ id: "s-w1", name: "worker one", activity: "working", spawnedBy: "s-m", group: "Inbox", parentId: "s-m" }),
+  R({ id: "s-w2", name: "worker two", activity: "idle", spawnedBy: "s-m", group: "Inbox", parentId: "s-m" }),
+  R({ id: "s-g", name: "grandchild", activity: "working", spawnedBy: "s-w1", group: "Inbox", parentId: "s-w1" }),
+  R({ id: "s-o", name: "orphan", activity: "working", spawnedBy: "s-gone", group: "Inbox", parentId: "s-gone" })], {})
 let treeSecs = M.sections(treeFiltered, "groups", {})
 const inbox = treeSecs.find(s => s.name === "Inbox")
 assert.deepStrictEqual(inbox.nodes.map(n => n.row.id), ["s-m", "s-o"],
@@ -101,6 +102,57 @@ const openSecs = M.sections(treeFiltered, "groups",
 const openInbox = openSecs.find(s => s.name === "Inbox")
 assert.deepStrictEqual(openInbox.nodes.map(n => n.row.id), ["s-m", "s-w1", "s-g", "s-w2", "s-o"], "parent before children")
 assert.deepStrictEqual(openInbox.nodes.map(n => n.depth), [0, 1, 2, 1, 0])
+// A worker folds under its manager wherever the manager is listed,
+// whatever group holds the worker (Android SubSessions.kt:96-132
+// `foldSections` runs on the displayed sections after the Needs-you
+// lift: `placed` holds the rows of all non-collapsed sections, each
+// child shows once under its parent). The manager's section keeps the
+// fold; a section the fold emptied is dropped.
+const crossRows = [R({ id: "s-m", name: "manager", activity: "working", group: "Inbox" }),
+  R({ id: "s-w1", name: "worker one", activity: "working", spawnedBy: "s-m", group: "Deps" }),
+  R({ id: "s-w2", name: "worker two", activity: "idle", spawnedBy: "s-m", group: "Deps" })]
+const crossFiltered = M.applyFilters(crossRows, {})
+const crossSecs = M.sections(crossFiltered, "groups", {})
+assert.deepStrictEqual(crossSecs.map(s => s.id), ["group:inbox"],
+  "a section the fold emptied is dropped")
+const crossInbox = crossSecs.find(s => s.id === "group:inbox")
+assert.strictEqual(crossInbox.count, 1, "the header keeps counting the section's own rows (Android GroupSections.kt:70 reads the post-fold rows)")
+assert.deepStrictEqual(crossInbox.nodes.map(n => n.row.id), ["s-m"],
+  "a cross-group worker hides under its manager")
+assert.strictEqual(crossInbox.nodes[0].collapsed, true, "the parent row carries the fold")
+const crossOpen = M.sections(crossFiltered, "groups", { collapsed: { [M.subCollapseId(crossRows[0])]: false } })
+const crossOpenInbox = crossOpen.find(s => s.id === "group:inbox")
+assert.deepStrictEqual(crossOpenInbox.nodes.map(n => n.row.id), ["s-m", "s-w1", "s-w2"],
+  "an opened cross-group parent lists its workers in the manager's section")
+assert.deepStrictEqual(crossOpenInbox.nodes.map(n => n.depth), [0, 1, 1])
+// A collapsed section can neither host nor receive a fold: the worker
+// stays a top-level row in its own section while the manager hides.
+const crossCollapsed = M.sections(crossFiltered, "groups", { collapsed: { "group:inbox": true } })
+assert.deepStrictEqual(crossCollapsed.find(s => s.id === "group:deps").nodes.map(n => n.row.id), ["s-w1", "s-w2"],
+  "a worker whose manager sits in a collapsed section stays in its own place")
+// The same fold runs in By state view: a worker folds under its manager
+// wherever the manager's state section lists it.
+const stateCrossMgr = R({ id: "s-m", name: "manager", group: "Inbox", parentId: "" })
+stateCrossMgr.ownerState = "idle"
+const stateCrossWrk = R({ id: "s-w", name: "worker", group: "Deps", spawnedBy: "s-m" })
+const stateCross = M.sections([stateCrossMgr, stateCrossWrk], "state", {})
+assert.deepStrictEqual(stateCross.find(s => s.id === "state:idle").nodes.map(n => n.row.id), ["s-m"],
+  "state view folds across groups too")
+// A group-less worker has no section of its own: it folds under its
+// manager in the manager's group.
+const groupless = M.sections(M.applyFilters([R({ id: "s-m", name: "manager", activity: "working", group: "Deps" }),
+  R({ id: "s-w", name: "worker", activity: "working", spawnedBy: "s-m", group: null })], {}), "groups", {})
+assert.deepStrictEqual(groupless.find(s => s.name === "Deps").nodes.map(n => n.row.id), ["s-m"],
+  "a group-less worker folds under its manager")
+// An owned group with rows the fold hid stays with its header: the
+// section keeps its own rows and count (Android GroupSections.kt:70
+// reads the post-fold rows), only the fold hides them under a manager
+// of another section.
+const ownedDrop = M.sections(crossFiltered, "groups", { groups: ["Deps"] })
+const ownedDeps = ownedDrop.find(s => s.name === "Deps")
+assert.strictEqual(ownedDeps.nodes.length, 0, "the owned section keeps no rows the fold hid")
+assert.strictEqual(ownedDeps.rows.length, 2, "the owned section still lists its own rows")
+assert.strictEqual(ownedDeps.count, 2, "the header still counts the section's own rows (Android GroupSections.kt:70)")
 // Needs you never folds (Android folds group sections only): every waiting
 // session is its own depth-0 row in waiting order, with its sub-session
 // count as an annotation. A worker that waited longest comes first even
@@ -243,10 +295,11 @@ assert.deepStrictEqual(M.applyFilters(rows, { query: "GH PR" }).map(r => r.id), 
 let secs = M.sections(visible, "groups", { groups: ["Empty one"], collapsed: { "group:deps": true } })
 assert.strictEqual(secs[0].id, "needs-you")
 assert.deepStrictEqual(secs[0].rows.map(r => r.id), ["s-d", "s-e"], "oldest wait first")
-assert.deepStrictEqual(secs.map(s => s.name), ["", "Inbox", "Empty one", "Deps"])
-assert.strictEqual(secs.find(s => s.name === "Deps").collapsed, true)
+assert.deepStrictEqual(secs.map(s => s.name), ["", "Inbox", "Empty one", "Deps"],
+  "a collapsed section keeps its header; owned groups stay even when empty")
+assert.strictEqual(secs.find(s => s.name === "Empty one").count, 0, "a group with no rows of its own shows 0")
 const flat = M.flatten(secs)
-assert.ok(!flat.some(i => i.type === "row" && i.row.id === "s-a"), "collapsed group rows not navigable")
+assert.ok(!flat.some(i => i.type === "row" && i.row.id === "s-a"), "collapsed group rows hide behind the header")
 
 secs = M.sections(visible, "state", {})
 assert.deepStrictEqual(secs.map(s => s.id), ["needs-you", "state:working", "state:idle"])

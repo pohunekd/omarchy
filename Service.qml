@@ -266,13 +266,14 @@ Item {
     // the fold map is pruned: rebuild every section the panel shows from
     // the full snapshot (Needs you is its own flat list) and take the
     // union of their live `sub:` keys.
+    // The fold spans sections (a worker folds under its manager
+    // wherever the manager is listed), so the live `sub:` keys come
+    // from one tree over the full snapshot, not from per-section
+    // builds that no longer see cross-group parents.
     var perSection = {}
-    var shown = Model.sections(Model.applyFilters(rows, {}), "groups", {})
-      .concat(Model.sections(Model.applyFilters(rows, {}), "state", {}))
-    for (var s = 0; s < shown.length; s++) {
-      var keys = Model.liveSubKeys(Model.buildTrees(shown[s].rows || [], c))
-      for (var k in keys) perSection[k] = true
-    }
+    var tree = Model.foldTree(Model.applyFilters(rows, {}), c)
+    var keys = Model.liveSubKeys(tree)
+    for (var k in keys) perSection[k] = true
     saveLayout(Object.assign({}, layout,
       { collapsed: Model.subOpenMap(c, row, row.treeCollapsed === true, perSection) }))
   }

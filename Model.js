@@ -339,7 +339,8 @@ function groupNames(rows, layout) {
   }
   var extra = []
   for (var j = 0; j < rows.length; j++) {
-    if (!has(rows[j].group)) { names.push(rows[j].group); extra.push(rows[j].group) }
+    var gname = groupOf(rows[j])
+    if (!has(gname)) { names.push(gname); extra.push(gname) }
   }
   var head = names.slice(0, names.length - extra.length)
   extra.sort(function(a, b) { return a.toLowerCase() < b.toLowerCase() ? -1 : 1 })
@@ -357,8 +358,9 @@ function groupNames(rows, layout) {
 // The fold is closed by default and opens in place; explicit folds live in
 // layout.collapsed under the sub id. The top-level sort follows the calling
 // section (`needsOrder` keeps the oldest wait first in Needs you).
-function buildTrees(rows, collapsed, order) {
+function buildTrees(rows, collapsed, order, showAll) {
   var cmp = typeof order === "function" ? order : rowOrder
+  var openAll = showAll === true
   var snap = rows.slice(), byId = {}, byHostId = {}, top = []
   for (var i = 0; i < snap.length; i++) {
     // Copy the snapshot: one section listing only children still names the
@@ -445,7 +447,7 @@ function buildTrees(rows, collapsed, order) {
   function settle(n) {
     n.children.sort(rowOrder)
     for (var w = 0; w < n.children.length; w++) settle(n.children[w])
-    if (n.flatSearch) n.treeCollapsed = false
+    if (openAll || n.flatSearch) n.treeCollapsed = false
     else {
       var c = collapsed[subCollapseId(n)]
       n.treeCollapsed = c === undefined ? n.children.length > 0 : c === true
@@ -467,26 +469,76 @@ function buildTrees(rows, collapsed, order) {
 // marker slot, so a flat section keeps the rows where they were on main.
 function treeItems(top) {
   var items = []
-  var tree = top.some(function(row) { return row.children.length > 0 })
-  function walk(row, depth) {
-    var kids = row.children.filter(function(c) { return c.parentRow === row })
-    var shut = kids.length > 0 && row.treeCollapsed
-    items.push({ row: row, depth: depth, collapsed: shut, tree: tree })
+  // A child's row object carries its own fold marker and depth from
+  // its parent; the marker is read through `node.collapsed`, so nodes
+  // under a folded parent still mark their own sub-folds correctly.
+  function shownKids(self) {
+    return (self.children || []).filter(function(c) { return c.parentRow === self })
+  }
+  function walk(self, depth) {
+    var kids = shownKids(self)
+    // A child is listed under the parent only when the parent row
+    // displays its open fold; a displayed row never sits under two
+    // parents, Android parity (foldSections pushes each child once,
+    // under its parent).
+    var shut = kids.length > 0 && self.treeCollapsed
+    items.push({ row: self, depth: depth, collapsed: shut, tree: false })
     if (shut) return
     for (var i = 0; i < kids.length; i++) walk(kids[i], depth + 1)
   }
-  for (var t = 0; t < top.length; t++) walk(top[t], 0)
+  for (var t = 0; t < top.length; t++) {
+    var root = top[t]
+    // A child of the shared tree renders under its parent, which lives
+    // in the parent's section; here only roots and orphans render
+    // (Android foldSections pushes a child only under its parent). A
+    // child whose parent is folded still lists in its own section when
+    // the parent's section does not display the fold (collapsed away or
+    // lifted out): `byKey` then lacks the parent and the child is a root.
+    if (root.parentRow && root.parentRow.key) continue
+    walk(root, 0)
+  }
+  var tree = items.some(function(n) { return n.depth > 0 || n.collapsed })
+  for (var j = 0; j < items.length; j++) items[j].tree = tree
   return items
 }
 
-function sectionNodes(list, collapsed, order, expand) {
+function sectionNodes(list, collapsed, order, expand, cross) {
   var rows = (list || []).map(function(r) {
     var c = {}
     for (var f in r) c[f] = r[f]
     if (expand === "search") c.flatSearch = true
     return c
   })
-  return treeItems(buildTrees(rows, collapsed || {}, order))
+  // With a shared cross-section tree the section renders the shared
+  // copy of the rows it owns: every section reads the same shared
+  // objects, so a manager lists its open children even when those
+  // children belong to another section. Without one the section builds
+  // the tree from its own rows as before.
+  if (cross && cross.byKey) {
+    var show = []
+    var seen = {}
+    var isGroup = true
+    for (var m = 0; m < rows.length; m++) {
+      var shared = cross.byKey[rows[m].key]
+      if (!shared || seen[shared.key]) continue
+      seen[shared.key] = true
+      if (shared.parentRow && shared.parentRow.key) {
+        // A group section hides a member anchored under the parent of
+        // another section: the child renders under its parent there
+        // (Android foldSections pushes a child only under its parent).
+        var anchor = cross.byKey[shared.parentRow.key]
+        if (anchor && sameGroup(anchor.group, rows[m].group) === false) continue
+        // A child anchored under a folded parent of its own section
+        // lists here when opened, hidden when the fold is shut.
+        if (shared.treeCollapsed === false || (anchor && anchor.treeCollapsed === false)) { show.push(shared); continue }
+        if (anchor && anchor.treeCollapsed === true) continue
+      }
+      show.push(shared)
+    }
+    return treeItems(show, null)
+  }
+  // No shared tree: build the fold from the section's own rows.
+  return treeItems(buildTrees(rows, collapsed || {}, order), null)
 }
 
 function sections(rows, view, layout) {
@@ -529,27 +581,95 @@ function sections(rows, view, layout) {
 
   if (view === "state") {
     var order = ["working", "idle", "problem", "nostate", "ended"]
+    // One tree over all displayable rows, so a worker folds under its
+    // manager wherever the manager is listed (port of Android
+    // SubSessions.foldSections, which runs on the displayed sections
+    // after the Needs-you lift). Rows of a collapsed section can neither
+    // host nor receive a fold; a child whose parent is not displayed
+    // stays top-level in its own section.
+    var stateTree = foldSectionsAcross(rest, collapsed, rowOrder, flatSearch)
     for (var s = 0; s < order.length; s++) {
       var list = rest.filter(function(r) { return r.ownerState === order[s] }).sort(rowOrder)
       if (list.length === 0) continue
       var sid = "state:" + order[s]
-      out.push({ id: sid, kind: "state", state: order[s], name: "", rows: list, nodes: sectionNodes(list, collapsed, rowOrder, expand),
+      var stateNodes = sectionNodes(list, collapsed, rowOrder, expand, stateTree)
+      out.push({ id: sid, kind: "state", state: order[s], name: "", rows: list, nodes: stateNodes,
                  count: list.length, collapsed: !!collapsed[sid] })
     }
     return out
   }
 
   var names = groupNames(rows, layout)
+  // One tree over all displayable rows, so a worker folds under its
+  // manager wherever the manager is listed (port of Android
+  // SubSessions.foldSections, SubSessions.kt:96-132: `placed` holds the
+  // A section the fold emptied is dropped). A section the fold
+  // emptied is dropped, except Inbox and the owner's own groups, which
+  // stay with their header: a session needs an always-visible place it
+  // can be moved into. Owned groups are read case-insensitively like
+  // the membership match below. The header counts the section's own
+  // rows (Android GroupSections.kt:70 reads the post-fold section rows),
+  // not the shown subtree: the section title still says how many
+  // sessions the group holds, even when the fold hides them under a
+  // manager of another section.
+  var groupTree = foldSectionsAcross(rest, collapsed, rowOrder, flatSearch)
   for (var g = 0; g < names.length; g++) {
-    var members = rest.filter(function(r) { return sameGroup(r.group, names[g]) }).sort(rowOrder)
+    var members = rest.filter(function(r) { return sameGroup(groupOf(r), names[g]) }).sort(rowOrder)
     var gid = "group:" + names[g].toLowerCase()
     var isInbox = sameGroup(names[g], INBOX)
+    var ownedGroup = isInbox || ((layout && layout.groups) || []).some(function(n) { return sameGroup(n, names[g]) })
+    // A collapsed section keeps its header so the owner can open it
+    // again; its rows hide behind the header like before. The shared
+    // tree hides members anchored under a parent of another section;
+    // the filter below drops the emptied section.
+    var nodes = (members.length === 0 && !ownedGroup) ? []
+      : sectionNodes(members, collapsed, rowOrder, expand, groupTree)
+    if (members.length > 0 && nodes.length === 0 && !ownedGroup && !collapsed[gid]) continue
     // Inbox and the owner's own groups show even when empty, so a session
     // can be moved into them.
-    out.push({ id: gid, kind: "group", name: names[g], inbox: isInbox, rows: members, nodes: sectionNodes(members, collapsed, rowOrder, expand),
+    out.push({ id: gid, kind: "group", name: names[g], inbox: isInbox, rows: members, nodes: nodes,
                count: members.length, collapsed: !!collapsed[gid] })
   }
   return out
+}
+
+// One sub-session tree over all displayable rows: Android foldSections
+// (pohunek-companion-android SubSessions.kt) builds `placed` from the rows
+// of all non-collapsed sections, so a child shows under its parent
+// wherever the parent is listed. Rows of a collapsed section can neither
+// host nor receive a fold, so they are left out of the build; Needs-you
+// rows are never passed in. Parents whose row copy the per-section build
+// left out are re-anchored here: the shared maps of their section carry
+// the same key, so the parent's own section recognizes its children.
+// A search opens every fold: `flatSearch` keeps parents open while
+// settling, so every hit stays in its own place.
+function foldSectionsAcross(rows, collapsed, order, flatSearch) {
+  var shown = [], byKey = {}
+  for (var i = 0; i < rows.length; i++) {
+    // Rows of a collapsed section can neither host nor receive a fold
+    // (Android foldSections skips collapsed sections); Needs-you rows
+    // stay lifted and are never passed in.
+    var gid = "group:" + String(groupOf(rows[i])).toLowerCase()
+    if (gid && collapsed && collapsed[gid]) continue
+    if (rows[i].ownerState === "needs") continue
+    shown.push(rows[i])
+  }
+  var tree = buildTrees(shown, collapsed || {}, order, flatSearch)
+  for (var t = 0; t < tree.length; t++) {
+    var stack = [tree[t]]
+    while (stack.length > 0) {
+      var n = stack.pop()
+      byKey[n.key] = n
+      for (var k = 0; k < n.children.length; k++) stack.push(n.children[k])
+    }
+  }
+  return { byKey: byKey }
+}
+
+// One tree over the displayable rows with no section filter: the union of
+// the live `sub:` keys for the fold map (see Service.qml toggleSub).
+function foldTree(rows, collapsed) {
+  return buildTrees((rows || []).filter(function(r) { return r.ownerState !== "needs" }), collapsed || {}, rowOrder)
 }
 
 // Header and row entries in display order, for keyboard navigation.
@@ -762,7 +882,7 @@ if (typeof module !== "undefined") {
     groupNames: groupNames, ageParts: ageParts, pushRecent: pushRecent, filterCount: filterCount,
     fuzzyScore: fuzzyScore, fuzzyFilter: fuzzyFilter, FUZZY_THRESHOLD: FUZZY_THRESHOLD,
     onboardAgents: onboardAgents, onboardingCard: onboardingCard, onboardingRecordLaunched: onboardingRecordLaunched,
-    parentIdOf: parentIdOf, subCollapseId: subCollapseId, subOpenMap: subOpenMap, pruneFoldState: pruneFoldState, liveSubKeys: liveSubKeys, buildTrees: buildTrees, sectionNodes: sectionNodes,
+    parentIdOf: parentIdOf, subCollapseId: subCollapseId, subOpenMap: subOpenMap, pruneFoldState: pruneFoldState, liveSubKeys: liveSubKeys, buildTrees: buildTrees, sectionNodes: sectionNodes, foldTree: foldTree,
     INBOX: INBOX, NEEDS_YOU: NEEDS_YOU
   }
 }

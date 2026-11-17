@@ -102,7 +102,10 @@ needs you. This widget puts all of it in the bar you already look at:
   a count and open in place; everything waiting for you stays in its own
   row in Needs you, with its sub-session count, and a search opens every
   fold, so a hit never sits behind a closed parent. A sub-session whose
-  manager is gone stays a top-level row. A folded parent carries the worst
+  manager is gone stays a top-level row. A worker folds under its
+  manager wherever the manager is listed, whatever group either of
+  them is in: a section that only the fold emptied is dropped, except
+  Inbox and your own groups, which keep their header. A folded parent carries the worst
   state of its hidden rows: its dot and fold marker cue when a worker under
   it waits for you or broke.
 - **🚀 New sessions without the CLI.** Pick a host, a project and an agent (with
