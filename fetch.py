@@ -98,6 +98,12 @@ def slim_session(raw, host):
         return None
     meta = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
     runtime = raw.get("runtime") if isinstance(raw.get("runtime"), dict) else {}
+    spawned = raw.get("spawned_by")
+    parent = None
+    if isinstance(spawned, dict) and isinstance(spawned.get("session_id"), str) and ID_RE.match(spawned["session_id"]):
+        parent = spawned["session_id"]
+    elif isinstance(spawned, str) and ID_RE.match(spawned):
+        parent = spawned
     subagents = raw.get("subagents") if isinstance(raw.get("subagents"), list) else []
     background = raw.get("background") if isinstance(raw.get("background"), dict) else {}
     items = background.get("items") if isinstance(background.get("items"), list) else []
@@ -116,6 +122,7 @@ def slim_session(raw, host):
         "cwd": clean(raw.get("cwd"), 400),
         "project": clean(raw.get("project_label") or raw.get("project_id"), 80),
         "projectId": clean(raw.get("project_id"), 120),
+        "spawnedBy": parent,
         "branch": clean(raw.get("branch"), 120),
         "worktree": clean(raw.get("worktree_path"), 400),
         "group": clean(meta.get("companion.group"), 120) if "companion.group" in meta else None,

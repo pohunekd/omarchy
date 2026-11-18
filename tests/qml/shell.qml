@@ -41,6 +41,9 @@ ShellRoot {
       svc.applySnapshot(JSON.stringify({ installed: true, hosts: [
         { target: "local", label: "workstation", local: true, reachable: true, notifications: [], sessions: [
           session("s-a1", { group: "Deps", work: { provider: "github", kind: "pr", id: "12", url: "https://github.com/a/b/pull/12" } }),
+          session("s-a1w", { group: "Inbox", activity: "working", spawned_by: { session_id: "s-a1", daemon_id: "d-1" }, updatedAt: iso(20) }),
+          session("s-a1o", { group: "Deps", activity: "working", spawned_by: "s-gone", updatedAt: iso(10) }),
+          session("s-a1x", { activity: "working", spawned_by: "s-gone", updatedAt: iso(5) }),
           session("s-a2", { activity: "idle", updatedAt: iso(4000) }),
           session("s-a3", { state: "stopped", runtimeState: "terminal", resumable: true }) ] },
         { target: "laptop", label: "laptop", reachable: true, sessions: [
@@ -49,13 +52,54 @@ ShellRoot {
         { target: "gone", label: "gone", reachable: false, error: "timeout", sessions: [], notifications: [] } ] }), 0)
 
       console.log("snapshot")
-      check("rows built", svc.rows.length, 4)
+      check("rows built", svc.rows.length, 7)
       check("bar state", svc.counts.state, "needs")
       check("needs count", svc.counts.needs, 1)
       check("first section is Needs you", barPanel.sectionList[0].kind, "needs")
       check("needs row is the blocked one", barPanel.sectionList[0].rows[0].id, "s-b1")
       check("groups view lists Inbox and Deps", barPanel.sectionList.slice(1).map(function(s) { return s.name }).join(","), "Inbox,Deps")
+      var inbox = null
+      for (var bi = 0; bi < barPanel.sectionList.length; bi++) if (barPanel.sectionList[bi].name === "Inbox") inbox = barPanel.sectionList[bi]
+      check("group-less session stays in Inbox", inbox ? inbox.nodes.map(function(n) { return n.row.id }).join(",") : "", "s-a1x,s-a2")
+      check("group-less session is top-level", inbox ? inbox.nodes.map(function(n) { return n.depth }).join(",") : "", "0,0")
+      check("group-less orphan folds at depth 0", inbox ? inbox.nodes.some(function(n) { return n.row.id === "s-a1x" && n.depth === 0 }) : false, true)
       check("ended hidden by default", barPanel.visibleRows.some(function(r) { return r.ownerState === "ended" }), false)
+      check("worker folds under its manager", barPanel.visibleRows.filter(function(r) { return r.id === "s-a1w" }).length, 1)
+      // A sub-session folds under its manager wherever the manager is
+      // listed: s-a1w sits in Inbox but its manager s-a1 sits in Deps,
+      // so the worker shows under Deps and Inbox holds the orphans.
+      var deps = null
+      for (var si = 0; si < barPanel.sectionList.length; si++) if (barPanel.sectionList[si].name === "Deps") deps = barPanel.sectionList[si]
+      check("Deps section found", deps !== null, true)
+      check("cross-group worker folds under its manager", deps.nodes.map(function(n) { return n.row.id }).join(","), "s-a1o,s-a1")
+      check("Deps depths", deps.nodes.map(function(n) { return n.depth }).join(","), "0,0")
+      var depsManager = null
+      for (var di = 0; di < deps.nodes.length; di++) if (deps.nodes[di].row.id === "s-a1") depsManager = deps.nodes[di]
+      check("Deps manager found", depsManager !== null, true)
+      check("folded manager carries the fold", depsManager ? depsManager.collapsed : false, true)
+      // M1: Deps lists s-a1o and the s-a1 manager, while `members`
+      // counts only the section's own rows (the Inbox worker is the
+      // manager's section-mate here), so right-click removal must
+      // still refuse the group.
+      check("Deps owns its shown rows", deps ? deps.members : -1, 2)
+      check("Deps shows its shown rows", deps ? deps.count : -1, 2)
+      check("flat list hides the worker", barPanel.items.filter(function(i) { return i.type === "row" }).map(function(i) { return i.row.id }).join(","), "s-b1,s-a1x,s-a2,s-a1o,s-a1")
+      svc.toggleSub(depsManager.row)
+      // Top-level roots sort newest-first (rowOrder): the orphan s-a1o
+      // (iso(10)) stays ahead of the manager s-a1 (iso(30)) even when the
+      // manager is open; parent-before-child still holds inside the fold.
+      check("opened manager lists parent before child", barPanel.items.filter(function(i) { return i.type === "row" }).map(function(i) { return i.row.id }).join(","), "s-b1,s-a1x,s-a2,s-a1o,s-a1,s-a1w")
+      var workerItem = null
+      for (var wi = 0; wi < barPanel.items.length; wi++) if (barPanel.items[wi].type === "row" && barPanel.items[wi].row.id === "s-a1w") workerItem = barPanel.items[wi]
+      check("child depth", workerItem ? workerItem.depth : -1, 1)
+      var opened = null
+      for (var oi = 0; oi < barPanel.sectionList.length; oi++) if (barPanel.sectionList[oi].name === "Deps") opened = barPanel.sectionList[oi]
+      // nodes[0] is the newer orphan, not the manager: address it by id.
+      var openedManager = null
+      for (var om = 0; om < opened.nodes.length; om++) if (opened.nodes[om].row.id === "s-a1") openedManager = opened.nodes[om]
+      check("Deps manager still listed", openedManager !== null, true)
+      svc.toggleSub(openedManager.row)
+      check("toggled back, worker hidden again", barPanel.items.filter(function(i) { return i.type === "row" }).map(function(i) { return i.row.id }).join(","), "s-b1,s-a1x,s-a2,s-a1o,s-a1")
       check("multi host", barPanel.multiHost, true)
       check("unreachable host listed", barPanel.unreachableHosts.length, 1)
 
@@ -77,6 +121,9 @@ ShellRoot {
       console.log("view")
       svc.setView("state")
       check("state view sections", barPanel.sectionList.map(function(s) { return s.id }).join(","), "needs-you,state:working,state:idle")
+      // Same newest-first order as the Deps section: the orphan s-a1o
+      // (iso(10)) sorts ahead of the folded manager s-a1 (iso(30)).
+      check("state view folds too", barPanel.sectionList[1].nodes.map(function(n) { return n.row.id }).join(","), "s-a1x,s-a1o,s-a1")
       svc.setView("groups")
 
       console.log("sheets")
@@ -154,11 +201,56 @@ ShellRoot {
       barPanel.cursor = 0
       barPanel.moveCursor(1)
       check("cursor on the needs row", barPanel.currentRow() ? barPanel.currentRow().id : "", "s-b1")
-      var collapsedBefore = barPanel.sectionList[1].collapsed
-      barPanel.cursor = 2
+      // Drive to the Inbox header by section id, not by a hardcoded index.
+      var inboxHeader = -1
+      for (var hi = 0; hi < barPanel.items.length; hi++)
+        if (barPanel.items[hi].type === "header" && barPanel.items[hi].section.id === "group:inbox") inboxHeader = hi
+      check("Inbox header found", inboxHeader >= 0, true)
+      var inboxSec = null
+      for (var ib = 0; ib < barPanel.sectionList.length; ib++) if (barPanel.sectionList[ib].name === "Inbox") inboxSec = barPanel.sectionList[ib]
+      var collapsedBefore = inboxSec.collapsed
+      barPanel.cursor = inboxHeader
       barPanel.activate()
-      check("Enter on a group header collapses it", barPanel.sectionList[1].collapsed, !collapsedBefore)
-      svc.toggleCollapsed(barPanel.sectionList[1].id)
+      var inboxAfter = null
+      for (var ia = 0; ia < barPanel.sectionList.length; ia++) if (barPanel.sectionList[ia].name === "Inbox") inboxAfter = barPanel.sectionList[ia]
+      check("Enter on a group header collapses it", inboxAfter ? inboxAfter.collapsed : collapsedBefore, !collapsedBefore)
+      svc.toggleCollapsed(inboxAfter.id)
+      // The folded Deps manager: Enter opens it in place.
+      var managerIdx = -1
+      for (var mj = 0; mj < barPanel.items.length; mj++)
+        if (barPanel.items[mj].type === "row" && barPanel.items[mj].row.id === "s-a1") managerIdx = mj
+      check("Deps manager row found", managerIdx >= 0, true)
+      barPanel.cursor = managerIdx
+      var openedBefore = barPanel.items.length
+      barPanel.activate()
+      check("Enter opens a folded manager", barPanel.items.length, openedBefore + 1)
+      check("Enter lands on the manager row", barPanel.currentRow() ? barPanel.currentRow().id : "", "s-a1")
+      // The left key helper folds a sub-session back under its manager and
+      // lands the cursor on the manager; on an open parent it folds itself.
+      var workerIdx = -1
+      for (var wj = 0; wj < barPanel.items.length; wj++)
+        if (barPanel.items[wj].type === "row" && barPanel.items[wj].row.id === "s-a1w") workerIdx = wj
+      barPanel.cursor = workerIdx
+      var workerRow = barPanel.currentRow()
+      check("cursor on the worker", workerRow ? workerRow.id : "", "s-a1w")
+      var workerEntry = null
+      for (var ei = 0; ei < barPanel.items.length; ei++)
+        if (barPanel.items[ei].type === "row" && barPanel.items[ei].row.id === "s-a1w") workerEntry = barPanel.items[ei]
+      check("worker can fold back", workerEntry !== null && (workerEntry.depth || 0) > 0, true)
+      check("foldBack folds to the manager", barPanel.foldBack(workerEntry), true)
+      check("foldBack lands on the manager", barPanel.currentRow() ? barPanel.currentRow().id : "", "s-a1")
+      check("folded back, worker hidden again", barPanel.items.length, openedBefore)
+      var managerEntry = null
+      for (var mi = 0; mi < barPanel.items.length; mi++)
+        if (barPanel.items[mi].type === "row" && barPanel.items[mi].row.id === "s-a1") managerEntry = barPanel.items[mi]
+      check("foldBack on a folded manager does nothing", barPanel.foldBack(managerEntry), false)
+      barPanel.activate()
+      var managerEntryOpen = null
+      for (var mo = 0; mo < barPanel.items.length; mo++)
+        if (barPanel.items[mo].type === "row" && barPanel.items[mo].row.id === "s-a1") managerEntryOpen = barPanel.items[mo]
+      check("foldBack closes the open manager", barPanel.foldBack(managerEntryOpen), true)
+      check("foldBack leaves the cursor on the parent", barPanel.currentRow() ? barPanel.currentRow().id : "", "s-a1")
+      check("parent folded again", barPanel.items.length, openedBefore)
 
       console.log("get started card")
       var card = findAll(barPanel.panelContent, function(i) { try { return i.isOnboardCard === true } catch (e) { return false } })[0]
@@ -191,6 +283,33 @@ ShellRoot {
       svc.applySnapshot("", 127)
       check("no pohunek: missing", svc.onboarding.state, "missing")
       check("missing card shows", card ? card.visible : false, true)
+
+      console.log("group removal")
+      // A Deps worker folds under its manager in Inbox, so Deps shows
+      // 0 rows but still owns its worker: the header is kept and a
+      // right-click must refuse removal (Panel.qml gates on members).
+      svc.applySnapshot(JSON.stringify({ installed: true, hosts: [
+        { target: "local", label: "workstation", local: true, reachable: true, notifications: [], sessions: [
+          session("s-g1", { group: "Inbox", activity: "working" }),
+          session("s-g2", { group: "Deps", activity: "working", spawned_by: { session_id: "s-g1", daemon_id: "d-1" } }) ] } ] }), 0)
+      svc.saveLayout(Object.assign({}, svc.layout, { groups: ["Deps"] }))
+      var keptDeps = null
+      for (var kd = 0; kd < barPanel.sectionList.length; kd++) if (barPanel.sectionList[kd].id === "group:deps") keptDeps = barPanel.sectionList[kd]
+      check("emptied Deps is kept", keptDeps !== null, true)
+      check("kept Deps shows 0", keptDeps ? keptDeps.count : -1, 0)
+      check("kept Deps still owns its worker", keptDeps ? keptDeps.members : -1, 1)
+      var depsHeader = findAll(barPanel.panelContent, function(i) { try { return i.sec !== undefined && i.sec && i.sec.id === "group:deps" } catch (e) { return false } })[0]
+      check("Deps header declares its section", depsHeader !== undefined, true)
+      check("Deps header delegates the kept section", depsHeader ? depsHeader.sec.members : -1, 1)
+      depsHeader.rightClicked()
+      check("right-click refuses a group with members", (svc.layout.groups || []).indexOf("Deps") >= 0, true)
+      var keptStill = null
+      for (var ks = 0; ks < barPanel.sectionList.length; ks++) if (barPanel.sectionList[ks].id === "group:deps") keptStill = barPanel.sectionList[ks]
+      check("refused click keeps the Deps header", keptStill !== null, true)
+      svc.removeGroup("Deps")
+      var keptAfter = null
+      for (var ka = 0; ka < barPanel.sectionList.length; ka++) if (barPanel.sectionList[ka].id === "group:deps") keptAfter = barPanel.sectionList[ka]
+      check("direct removal still drops an owned group", keptAfter === null, true)
 
       console.log(failures === 0 ? "ALL OK" : failures + " FAILED")
     }

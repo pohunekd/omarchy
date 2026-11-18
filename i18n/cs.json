@@ -123,6 +123,12 @@
  "state.problem": "Problém s během",
  "state.nostate": "Bez stavu agenta",
  "state.ended": "Ukončeno",
+ "subSessions": {
+  "one": "%1 pod-relace",
+  "few": "%1 pod-relace",
+  "many": "%1 pod-relací",
+  "other": "%1 pod-relací"
+ },
  "subagents": {
   "one": "%1 subagent",
   "few": "%1 subagenti",
@@ -159,6 +165,7 @@
  "help.rightClickText": "obnovit všechny hosty",
  "help.panel": "V tomto panelu",
  "help.move": "pohyb",
+ "help.fold": "sbalit pod-relaci zpět pod manažera",
  "help.enter": "připojit, nebo sbalit skupinu",
  "help.actions": "akce řádku (také ⋮ nebo pravý klik)",
  "help.filters": "filtry Stav a Projekt",

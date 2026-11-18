@@ -63,7 +63,10 @@ Panel {
 
   readonly property string view: pohunek.layout.view === "state" ? "state" : "groups"
   readonly property var visibleRows: Model.applyFilters(pohunek.rows, filters)
-  readonly property var sectionList: Model.sections(visibleRows, view, pohunek.layout)
+  // A search opens every sub-session fold through `layout.searchOpen`, so
+  // a query hit never sits behind a closed parent.
+  readonly property var sectionList: Model.sections(visibleRows, view,
+    Object.assign({}, pohunek.layout, { searchOpen: root.filters.query.trim() !== "" }))
   readonly property var items: Model.flatten(sectionList)
   readonly property var projectChoices: Model.projects(pohunek.rows, pohunek.layout.recentProjects)
   readonly property var groupChoices: Model.groupNames(pohunek.rows, pohunek.layout)
@@ -106,7 +109,33 @@ Panel {
     var c = current()
     if (!c) return
     if (c.type === "header") { if (c.section.kind !== "needs") pohunek.toggleCollapsed(c.section.id) }
-    else attachRow(c.row)
+    else activateRow(c)
+  }
+
+  // A folded parent opens in place on Enter or a click; a leaf attaches.
+  // An entry without a row does nothing.
+  function activateRow(entry) {
+    if (!entry || !entry.row) return
+    if (entry.node && entry.node.collapsed) { pohunek.toggleSub(entry.row); return }
+    attachRow(entry.row)
+  }
+
+  // One fold control for the cursor: a sub-session at depth folds its
+  // manager and lands the cursor on it; an open parent (at depth or not)
+  // folds itself. Both the left key and the tests go through this
+  // function.
+  function foldBack(entry) {
+    if (!entry || !entry.node || !entry.row) return false
+    var target = entry.row
+    var kids = target.children && target.children.length > 0
+    if (kids && !entry.node.collapsed) { /* an open parent folds itself */ }
+    else if ((entry.depth || 0) > 0 && target.parentRow) target = target.parentRow
+    else return false
+    pohunek.toggleSub(target)
+    var itemsNow = root.items
+    for (var i = 0; i < itemsNow.length; i++)
+      if (itemsNow[i].type === "row" && itemsNow[i].row.key === target.key) { root.cursor = i; break }
+    return true
   }
 
   function attachRow(row) {
@@ -307,7 +336,12 @@ Panel {
           if (row) root.openSheet("actions", row)
         } else if (dx < 0) {
           var c = root.current()
-          if (c && c.type === "header" && !c.section.collapsed && c.section.kind !== "needs") pohunek.toggleCollapsed(c.section.id)
+          if (!c) return
+          if (c.type === "header") {
+            if (!c.section.collapsed && c.section.kind !== "needs") pohunek.toggleCollapsed(c.section.id)
+          } else {
+            root.foldBack(c)
+          }
         }
       }
       onActivateRequested: {
@@ -889,7 +923,7 @@ Panel {
       width: parent ? parent.width : 0
       implicitHeight: headerRow.implicitHeight + Style.space(sec && sec.kind === "needs" ? 14 : 18)
       onClicked: { root.cursor = itemIndex; if (sec && sec.kind !== "needs") pohunek.toggleCollapsed(sec.id) }
-      onRightClicked: if (sec && sec.kind === "group" && !sec.inbox && sec.count === 0) pohunek.removeGroup(sec.name)
+      onRightClicked: if (sec && sec.kind === "group" && !sec.inbox && sec.members === 0) pohunek.removeGroup(sec.name)
 
       Rectangle { anchors.fill: parent; color: header.hasCursor || header.hovered ? root.chipFill : "transparent"; radius: Style.cornerRadius }
       Rectangle { visible: header.sec && header.sec.kind !== "needs" && header.itemIndex > 0; width: parent.width; height: 1; color: root.hairline }
@@ -933,11 +967,22 @@ Panel {
       property var entry: null
       property int itemIndex: -1
       readonly property var row: entry ? entry.row : null
+      readonly property var node: entry ? entry.node : null
+      readonly property int depth: entry && entry.depth ? entry.depth : 0
+      readonly property bool hasKids: row && row.children ? row.children.length > 0 : false
+      readonly property bool folded: node ? !!node.collapsed : false
+      // Attention of the hidden subtree: the state dot of a folded parent
+      // reads the worst state under it, so a waiting or broken worker is
+      // never hidden without a cue.
+      readonly property string dotState: row ? (rowItem.folded && row.worstDown ? row.worstDown : row.ownerState) : ""
+      // Only sections that hold a tree reserve the fold-marker slot, so
+      // flat lists keep their rows where they were on main.
+      readonly property bool treeHere: row ? row.treeHere === true : false
       readonly property bool hasCursor: root.cursorActive && root.cursor === itemIndex
       width: parent ? parent.width : 0
       implicitHeight: rowCol.implicitHeight + Style.space(16)
       opacity: row && row.stale ? 0.45 : 1
-      onClicked: { root.cursor = itemIndex; root.attachRow(row) }
+      onClicked: { root.cursor = itemIndex; root.activateRow(rowItem.entry) }
       onRightClicked: { root.cursor = itemIndex; root.openSheet("actions", row) }
 
       Rectangle {
@@ -948,12 +993,31 @@ Panel {
       }
       Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.hairline }
 
+      // The fold marker keeps its slot left of the state dot, then each
+      // tree level indents one step: a folded row never shifts when it
+      // opens, and a leaf never moves under its parent's marker. The slot
+      // reads from the section, so flat sections look as on main.
+      Label {
+        visible: rowItem.hasKids
+        x: (rowItem.treeHere ? Style.space(4) : -Style.space(16)) + rowItem.depth * Style.space(14)
+        y: dot.y - Style.space(5)
+        width: Style.space(14)
+        text: rowItem.folded ? "›" : "⌄"
+        // A folded marker carries the hidden subtree attention: red while a
+        // descendant broke, orange while one needs the owner (reserved for
+        // omarchy#25 isolated rows; waiting rows list in Needs you today).
+        color: rowItem.folded && rowItem.row && rowItem.row.problemDown > 0 ? root.urgent
+             : rowItem.folded && rowItem.row && rowItem.row.needsDown > 0 ? root.stateColor("needs") : root.dim
+        font.pixelSize: Style.font.body
+        horizontalAlignment: Text.AlignHCenter
+      }
+
       Rectangle {
         id: dot
-        x: Style.space(6)
+        x: (rowItem.treeHere ? Style.space(20) : Style.space(6)) + rowItem.depth * Style.space(14)
         y: Style.space(10) + (titleLabel.implicitHeight - height) / 2
         width: Style.space(8); height: width; radius: width / 2
-        color: rowItem.row ? root.stateColor(rowItem.row.ownerState) : root.dim
+        color: rowItem.dotState ? root.stateColor(rowItem.dotState) : root.dim
       }
 
       Column {
@@ -968,7 +1032,21 @@ Panel {
         Label {
           id: titleLabel
           width: parent.width
-          text: rowItem.row ? rowItem.row.title : ""
+          text: {
+            var r = rowItem.row
+            if (!r) return ""
+            var label = r.title
+            // A folded parent names what waits under it: the count, and
+            // how many of the hidden rows need the owner or broke.
+            if (rowItem.folded && r.descendants > 0) {
+              label += "  ⌄ " + Commons.I18n.formatNumber(r.descendants)
+              if (r.needsDown > 0) label += " · " + Commons.I18n.formatNumber(r.needsDown) + " " + root.t("state.needs")
+              if (r.problemDown > 0) label += " · " + Commons.I18n.formatNumber(r.problemDown) + " " + root.t("state.problem")
+            } else if (r.descendants > 0 && !rowItem.folded) {
+              label += "  · " + strings.tn("subSessions", r.descendants).arg(Commons.I18n.formatNumber(r.descendants))
+            }
+            return label
+          }
           font.pixelSize: Style.font.body
         }
         Row {
@@ -1609,6 +1687,7 @@ Panel {
         { keys: ["↑", "↓"], text: root.t("help.move") },
         { keys: ["Enter"], text: root.t("help.enter") },
         { keys: ["→"], text: root.t("help.actions") },
+        { keys: ["←"], text: root.t("help.fold") },
         { keys: ["/"], text: root.t("filter.search") },
         { keys: ["s", "p"], text: root.t("help.filters") },
         { keys: ["v"], text: root.t("help.view") },

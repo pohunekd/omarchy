@@ -255,6 +255,22 @@ Item {
     if (c[sectionId]) delete c[sectionId]; else c[sectionId] = true
     saveLayout(Object.assign({}, layout, { collapsed: c }))
   }
+  // A sub-session fold is closed by default and open is the stored
+  // override, so toggling the sub id alone could never open it: this
+  // switches between the stored open and the stored closed states.
+  function toggleSub(row) {
+    if (!row) return
+    var c = Object.assign({}, layout.collapsed || {})
+    // The fold spans sections (a worker folds under its manager
+    // wherever the manager is listed), so the live `sub:` keys come
+    // from one tree over the full snapshot, Needs you included.
+    var perSection = {}
+    var tree = Model.foldTree(Model.applyFilters(rows, {}), c)
+    var keys = Model.liveSubKeys(tree)
+    for (var k in keys) perSection[k] = true
+    saveLayout(Object.assign({}, layout,
+      { collapsed: Model.subOpenMap(c, row, row.treeCollapsed === true, perSection) }))
+  }
   function addGroup(name) {
     var checked = Model.checkGroupName(name)
     if (!checked.ok) return checked
