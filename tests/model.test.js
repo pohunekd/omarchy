@@ -76,6 +76,7 @@ assert.strictEqual(deeper[0].children[0].treeCollapsed, true)
 // of it stays top-level.
 const cyclic = M.buildTrees([R({ id: "s-x", spawnedBy: "s-y" }), R({ id: "s-y", spawnedBy: "s-x" })], {})
 assert.strictEqual(cyclic.length, 2, "a cycle stays flat")
+// A member missing from the tree stays listed as its own node.
 assert.deepStrictEqual(M.sectionNodes([R({ id: "s-x", spawnedBy: "s-y" }), R({ id: "s-y", spawnedBy: "s-x" })], { byKey: {} }).map(n => n.row.id), ["s-x", "s-y"])
 const selfed = M.buildTrees([R({ id: "s-z", spawnedBy: "s-z" })], {})
 assert.strictEqual(selfed.length, 1, "a self-parent stays top-level")

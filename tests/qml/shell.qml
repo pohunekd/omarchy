@@ -298,14 +298,18 @@ ShellRoot {
       check("emptied Deps is kept", keptDeps !== null, true)
       check("kept Deps shows 0", keptDeps ? keptDeps.count : -1, 0)
       check("kept Deps still owns its worker", keptDeps ? keptDeps.members : -1, 1)
+      var depsHeader = findAll(barPanel.panelContent, function(i) { try { return i.sec !== undefined && i.sec && i.sec.id === "group:deps" } catch (e) { return false } })[0]
+      check("Deps header declares its section", depsHeader !== undefined, true)
+      check("Deps header delegates the kept section", depsHeader ? depsHeader.sec.members : -1, 1)
+      depsHeader.rightClicked()
+      check("right-click refuses a group with members", (svc.layout.groups || []).indexOf("Deps") >= 0, true)
+      var keptStill = null
+      for (var ks = 0; ks < barPanel.sectionList.length; ks++) if (barPanel.sectionList[ks].id === "group:deps") keptStill = barPanel.sectionList[ks]
+      check("refused click keeps the Deps header", keptStill !== null, true)
       svc.removeGroup("Deps")
       var keptAfter = null
       for (var ka = 0; ka < barPanel.sectionList.length; ka++) if (barPanel.sectionList[ka].id === "group:deps") keptAfter = barPanel.sectionList[ka]
       check("direct removal still drops an owned group", keptAfter === null, true)
-      var groupsBefore = (svc.layout.groups || []).slice()
-      var gated = keptDeps && keptDeps.kind === "group" && !keptDeps.inbox && keptDeps.members === 0
-      check("right-click refuses a group with members", gated, false)
-      check("layout untouched by the refused click", (svc.layout.groups || []).join(","), groupsBefore.join(","))
 
       console.log(failures === 0 ? "ALL OK" : failures + " FAILED")
     }
