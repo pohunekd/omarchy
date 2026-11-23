@@ -807,8 +807,20 @@ group_still_set() {
   jq -e --arg id "$1" --arg g "$2" '[.ok[]? | select(.id == $id and .metadata["companion.group"] == $g)] | length == 1' >/dev/null <<<"$listed"
 }
 
+# True unless the listed onboard session ended later than the end its bound
+# diff recorded. Reads $record and $listed of run_undo. An unreadable time
+# counts as later: the diff is then not trusted.
+bound_diff_current() {
+  jq -e --argjson l "$listed" '
+    def secs: sub("\\.[0-9]+"; "") | fromdateiso8601;
+    ([$l.ok[]? | .ended_at // empty] | first) as $now
+    | (.diff.ended_at // null) as $rec
+    | if $now == null or $rec == null then true
+      else (try (($now | secs) <= ($rec | secs)) catch false) end' >/dev/null <<<"$record"
+}
+
 run_undo() {
-  local record run_id sid diff bound=false ended projects profiles sessions status listed plan input
+  local record run_id sid diff bound=false resumed=false ended projects profiles sessions status listed plan input
   local can_rm=false count i label key rc out
   local -a argv failed=() done_list=() done_keys=() failed_profiles=()
   resolve_cli "$COMMAND"
@@ -834,13 +846,20 @@ run_undo() {
   # A diff the tool took when it watched the session end describes the run.
   # Without one, the changes are read now and may include later ones; this
   # late diff is never written to the record.
-  if jq -e '.diff.bound == "session_end"' >/dev/null <<<"$record"; then
+  # A bound diff describes the run only while the session has not ended again
+  # after it (a resumed session adds changes the diff never saw).
+  if jq -e '.diff.bound == "session_end"' >/dev/null <<<"$record" && ! bound_diff_current; then
+    resumed=true
+  fi
+  if [[ $resumed != true ]] && jq -e '.diff.bound == "session_end"' >/dev/null <<<"$record"; then
     bound=true
     diff=$(jq -c '.diff' <<<"$record")
     ended=$(jq -c '.diff.ended_at // null' <<<"$record")
   else
     diff=$(compute_diff "$record") || die "Could not read what changed since the onboarding run. Nothing was changed."
     ended=$(jq -c '[.ok[]? | .ended_at // empty] | first // null' <<<"$listed")
+    # After a resume, only what was added before the first end is provable.
+    if [[ $resumed == true ]]; then ended=$(jq -c '.diff.ended_at // null' <<<"$record"); fi
   fi
   if version_at_least "$CORE_VERSION" "$PROFILE_RM_VERSION"; then can_rm=true; fi
 
@@ -859,7 +878,12 @@ run_undo() {
   plan=$(jq -n --argjson in "$input" -f "$UNDO_JQ") || die "Could not plan the undo. Nothing was changed."
 
   say "Undo onboarding (run started $(jq -r "$JQ_CLEAN"' .started_at | clean' <<<"$record"))"
-  if [[ $bound != true ]]; then
+  if [[ $resumed == true ]]; then
+    echo "  The onboard session was resumed and ended again after what this run changed was recorded,"
+    echo "  so that record is stale: only what it provably added is removed: projects it registered"
+    echo "  before the session first ended and the $ONBOARD_PROFILE profile this tool wrote. The rest is"
+    echo "  listed as kept, with what to run yourself."
+  elif [[ $bound != true ]]; then
     echo "  What this run changed was not recorded when its session ended (its window was closed"
     echo "  before that), so only what it provably added is removed: projects it registered"
     echo "  before the session ended and the $ONBOARD_PROFILE profile this tool wrote. The rest is"

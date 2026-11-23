@@ -857,6 +857,38 @@ exit 3
         names = [p["name"] for p in self.pohunek("plugin", "profile", "list", "--all", "--json", extra=auto)[1]["ok"]["profiles"]]
         self.assertEqual(sorted(names), ["mine", "side", "work"])
 
+    def test_a_resumed_session_makes_the_bound_diff_stale(self):
+        """The session ended and bound the diff, was resumed from the panel's
+        interrupted card and ended again: what it added after the first end is
+        not in the diff, so Undo must not claim it."""
+        auto = self.auto_env()
+        code, out, err = self.run_waiting(["--yes", "--mode", "automatic", "--grant", "projects", *self.demo()], auto)
+        self.assertEqual(code, 0, out + err)
+        rec = self.read_record()
+        self.assertEqual(rec["diff"]["bound"], "session_end")
+        self.pohunek("project", "add", "/home/dev/code/after-resume", "--name", "after-resume", "--json", extra=auto)
+        path = self.state / "sessions.json"
+        rows = json.loads(path.read_text())
+        for row in rows:
+            row["ended_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
+        path.write_text(json.dumps(rows))
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("was resumed and ended again", r.stdout)
+        later = "p-" + hashlib.sha256(b"/home/dev/code/after-resume").hexdigest()[:8]
+        removed = [a[2] for a in self.writes() if a[:2] == ["project", "rm"]]
+        self.assertNotIn(later, removed, "a project added after the first end is not provably the run's")
+        self.assertIn(f"kept: project {later}: cannot prove", r.stdout)
+
+    def test_a_session_that_ended_once_keeps_its_bound_diff(self):
+        auto = self.auto_env()
+        code, out, err = self.run_waiting(["--yes", "--mode", "automatic", "--grant", "projects", *self.demo()], auto)
+        self.assertEqual(code, 0, out + err)
+        r = self.run_tool(["--undo", "--yes", *self.demo()], auto)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("was resumed and ended again", r.stdout)
+        self.assertNotIn("was not recorded when its session ended", r.stdout)
+
     def test_hooks_are_kept_when_their_removal_would_take_a_skill_from_before(self):
         auto = self.auto_env()
         self.pohunek("plugin", "profile", "create", "cwork", "--base", "codex", "--home", "/home/dev/.codex-work", "--json", extra=auto)
