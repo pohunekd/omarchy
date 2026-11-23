@@ -281,8 +281,38 @@ ShellRoot {
              svc.toolArgsValid("onboard", ["--agent", "x'; rm -rf ~"]),
              svc.toolArgsValid("onboard", ["--yes"])].join(","), "true,false,false")
       svc.applySnapshot("", 127)
+      svc.onboardingRecordPresent = true
+      svc.onboardAutoVersion = "0.43.0"
+      svc.applySnapshot(JSON.stringify({ installed: true, hosts: [
+        { target: "local", label: "workstation", local: true, reachable: true, notifications: [], sessions: [
+          session("s-lost", { onboardMode: "guided", runtimeState: "lost", resumable: true, activity: "idle" }) ] } ] }), 0)
+      check("lost onboard session: interrupted", svc.onboarding.state, "interrupted")
+      check("interrupted card shows", card ? card.visible : false, true)
+      check("interrupted card resumes the lost session", svc.onboarding.target + "/" + svc.onboarding.resumable, "s-lost/true")
+      svc.onboardingRecordPresent = false
+      check("interrupted needs the record", svc.onboarding.state, "ready")
+      card.mode = "automatic"
+      check("automatic text names the requirement", card.modeText.indexOf("needs pohunek 0.43.0 or newer") >= 0, true)
+      check("automatic text has no stale version", card.modeText.indexOf("(pohunek 0.43.0") < 0, true)
+      svc.onboardAutoVersion = ""
+      check("no versions file: the text names no version", card.modeText.indexOf("0.4") < 0, true)
+      card.mode = "guided"
+      svc.onboardingRecordPresent = true
+      svc.applySnapshot("", 127)
       check("no pohunek: missing", svc.onboarding.state, "missing")
       check("missing card shows", card ? card.visible : false, true)
+
+      console.log("blocked dialog on new session")
+      var offer = findAll(barPanel.panelContent, function(i) { try { return i.isBlockedOffer === true } catch (e) { return false } })[0]
+      check("offer exists", offer !== undefined, true)
+      check("no offer without a failure", offer ? offer.visible : true, false)
+      svc.blockedStart = { spec: { host: "local", agent: "claude", prompt: "fix the bug" } }
+      check("blocked failure shows the offer", offer ? offer.visible : false, true)
+      svc.dismissBlockedStart()
+      check("Dismiss hides the offer", offer ? offer.visible : true, false)
+      svc.heldPrompt = { target: "s-held", text: "fix the bug" }
+      check("held prompt belongs to its session", svc.hasHeldPrompt({ target: "s-held" }) + "/" + svc.hasHeldPrompt({ target: "s-other" }), "true/false")
+      svc.heldPrompt = null
 
       console.log("group removal")
       // A Deps worker folds under its manager in Inbox, so Deps shows

@@ -529,6 +529,39 @@ const onboardRows = M.buildRows([{ target: "local", label: "w", reachable: true,
   sessions: [S({ id: "s-on", onboardMode: "guided", onboardState: "" })] }], { idle: {}, needs: {} }, NOW, T)
 assert.deepStrictEqual(card({ rows: onboardRows }), { state: "running", target: "s-on" }, "rows carry onboard.mode from fetch.py")
 
+// an interrupted run: the newest onboard row was lost or failed, not finished
+const endedRow = (o) => onboardRow({ ownerState: "ended", ...o })
+assert.deepStrictEqual(card({ recordPresent: true, rows: [endedRow({ runtimeState: "lost", resumable: true })] }),
+  { state: "interrupted", target: "s-on", resumable: true }, "a lost run is interrupted")
+assert.strictEqual(card({ recordPresent: true, rows: [endedRow({ state: "failed" })] }).state, "interrupted", "a failed run is interrupted")
+assert.strictEqual(card({ recordPresent: true, rows: [endedRow({ runtimeState: "lost" })] }).resumable, false, "no native session: nothing to resume")
+assert.strictEqual(card({ recordPresent: true, rows: [endedRow({ state: "stopped" })] }).state, "done", "stopped normally is finished")
+assert.strictEqual(card({ recordPresent: true, rows: [endedRow({ state: "done" })] }).state, "done", "done normally is finished")
+assert.strictEqual(card({ recordPresent: true, rows: [endedRow({ runtimeState: "lost", onboardState: "done" })] }).state, "done", "marked done before it was lost")
+assert.strictEqual(card({ recordPresent: true, rows: [endedRow({ runtimeState: "lost", updatedAt: 1 }), endedRow({ state: "stopped", target: "s-new", updatedAt: 9 })] }).state, "done", "only the newest row decides")
+assert.strictEqual(card({ rows: [endedRow({ runtimeState: "lost" })] }).state, "ready", "no record: never launched or undone")
+assert.strictEqual(card({ recordPresent: true, dismissed: true, rows: [endedRow({ runtimeState: "lost" })] }).state, "dismissed", "Not now hides an interrupted card")
+assert.strictEqual(card({ recordPresent: true, again: true, rows: [endedRow({ runtimeState: "lost" })] }).state, "ready", "Run onboarding again")
+assert.strictEqual(card({ recordPresent: true, rows: [endedRow({ runtimeState: "lost", host: "laptop" })] }).state, "done", "another machine's row is ignored")
+assert.strictEqual(card({ recordPresent: true, rows: [endedRow({ runtimeState: "lost" }), onboardRow({ target: "s-live" })] }).state, "running", "a live run wins over a lost one")
+
+// Automatic mode's required core version comes from tools/onboard.versions
+assert.strictEqual(M.onboardRequirement('MIN_VERSION="0.42.0"\nAUTO_VERSION="0.43.0"\nPROFILE_RM_VERSION="0.43.0"\n'), "0.43.0")
+assert.strictEqual(M.onboardRequirement('AUTO_VERSION="x"'), "")
+assert.strictEqual(M.onboardRequirement(""), "")
+const shipped = fs.readFileSync(path.join(__dirname, "..", "tools", "onboard.versions"), "utf8")
+assert.match(M.onboardRequirement(shipped), /^\d+\.\d+\.\d+$/, "the shipped file carries AUTO_VERSION")
+
+// session new --input-stdin timeout: only the 0.44 blocked wording is special
+const blockedMsg = "the agent waits on a dialog that needs an answer (last activity: blocked); nothing was sent and the session was not kept, start the session without --input, answer the agent's dialog in it (`pohunek attach <session-id>`) and then send the input"
+const slowMsg = "agent did not show an editable prompt within 8000 ms (last activity: working); nothing was sent, raise input.initial_startup_grace_ms if the agent starts slowly"
+assert.strictEqual(M.newSessionFailure({ code: "session_input_not_ready", msg: blockedMsg }), "blocked_dialog")
+assert.strictEqual(M.newSessionFailure({ code: "session_input_not_ready", msg: slowMsg }), "plain", "slow start keeps the plain error")
+assert.strictEqual(M.newSessionFailure({ code: "session_input_not_ready", msg: slowMsg.replace("working", "blocked") }), "plain", "pre-0.44 blocked wording (startup-grace hint) is plain")
+assert.strictEqual(M.newSessionFailure({ code: "session_input_stalled", msg: blockedMsg }), "plain", "other code")
+assert.strictEqual(M.newSessionFailure({ code: "session_input_not_ready" }), "plain", "no message")
+assert.strictEqual(M.newSessionFailure(null), "plain")
+
 // a record counts only once it names the session it started
 assert.strictEqual(M.onboardingRecordLaunched('{"schema":1,"run_id":"ab","session_id":"s-01J"}'), true)
 assert.strictEqual(M.onboardingRecordLaunched('{"schema":1,"run_id":"ab"}'), false, "launch failed: no session_id")

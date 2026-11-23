@@ -807,20 +807,48 @@ function onboardingRecordLaunched(text) {
 // dismissed (Not now), again (Run onboarding again), rows }. An onboard session is a live row of this machine whose
 // `onboard.mode` is set and whose agent has not set `onboard.state=done`;
 // it wins over every other fact except a missing pohunek.
+//
+// An interrupted run is a recorded run whose newest onboard row ended because
+// the session was lost or failed, without the agent marking it done; a row that
+// ended normally (stopped or done) is a finished run.
 function onboardingCard(facts) {
   var f = facts || {}
   if (!f.installed) return { state: "missing", target: "" }
-  var rows = f.rows || [], running = null
+  var rows = f.rows || [], running = null, last = null
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i]
-    if (r.host !== "local" || r.stale || r.ownerState === "ended" || !r.onboardMode || r.onboardState === "done") continue
+    if (r.host !== "local" || r.stale || !r.onboardMode) continue
+    if (!last || r.updatedAt > last.updatedAt) last = r
+    if (r.ownerState === "ended" || r.onboardState === "done") continue
     if (!running || r.updatedAt > running.updatedAt) running = r
   }
   if (running) return { state: "running", target: running.target }
   if (f.again) return { state: "ready", target: "" }
   if (f.dismissed) return { state: "dismissed", target: "" }
+  if (f.recordPresent && last && last.onboardState !== "done" && (last.runtimeState === "lost" || last.state === "failed"))
+    return { state: "interrupted", target: last.target, resumable: !!last.resumable }
   if (f.recordPresent) return { state: "done", target: "" }
   return { state: "ready", target: "" }
+}
+
+// The core version tools/onboard needs for Automatic mode, read from
+// tools/onboard.versions (the file tools/onboard sources). "" when absent.
+function onboardRequirement(text) {
+  var m = /^AUTO_VERSION="(\d+\.\d+\.\d+)"$/m.exec(String(text || ""))
+  return m ? m[1] : ""
+}
+
+// --- New session: blocked-dialog timeout ------------------------------------
+
+// `session new --input-stdin` fails with session_input_not_ready and rolls the
+// session back. Core 0.44 words the blocked case as "waits on a dialog that
+// needs an answer"; every other message (a slow start, and older cores, which
+// print only "last activity: blocked" next to the startup-grace hint) is plain.
+var BLOCKED_INPUT_MARKER = "waits on a dialog that needs an answer (last activity: blocked)"
+function newSessionFailure(err) {
+  if (err && err.code === "session_input_not_ready" && typeof err.msg === "string"
+      && err.msg.indexOf(BLOCKED_INPUT_MARKER) >= 0) return "blocked_dialog"
+  return "plain"
 }
 
 // --- Pickers ---------------------------------------------------------------
@@ -920,6 +948,7 @@ if (typeof module !== "undefined") {
     groupNames: groupNames, ageParts: ageParts, pushRecent: pushRecent, filterCount: filterCount,
     fuzzyScore: fuzzyScore, fuzzyFilter: fuzzyFilter, FUZZY_THRESHOLD: FUZZY_THRESHOLD,
     onboardAgents: onboardAgents, onboardingCard: onboardingCard, onboardingRecordLaunched: onboardingRecordLaunched,
+    onboardRequirement: onboardRequirement, newSessionFailure: newSessionFailure,
     parentIdOf: parentIdOf, subCollapseId: subCollapseId, subOpenMap: subOpenMap, pruneFoldState: pruneFoldState, liveSubKeys: liveSubKeys, buildTrees: buildTrees, sectionNodes: sectionNodes, foldTree: foldTree,
     INBOX: INBOX, NEEDS_YOU: NEEDS_YOU
   }

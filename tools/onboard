@@ -33,11 +33,6 @@
 # Never passes --accept-runtime-loss, --stop-sessions or --purge; never sudo.
 set -euo pipefail
 
-MIN_VERSION="0.42.0"
-# The onboarding guide that automatic mode's grant and floor follow ships in
-# the 0.43.0 assistant bundle, with `plugin profile rm` for Undo.
-AUTO_VERSION="0.43.0"
-PROFILE_RM_VERSION="0.43.0"
 ONBOARD_PROFILE="pohunek-onboard"
 GRANT_IDS=(projects groups profiles profile-hooks cli-update)
 # Watching the onboard session end: poll interval, and how many failed reads
@@ -59,6 +54,9 @@ DIFF_JQ="$here/onboard-diff.jq"
 UNDO_JQ="$here/onboard-undo.jq"
 # shellcheck source=tools/verified-download.bash
 source "$here/verified-download.bash"
+# MIN_VERSION, AUTO_VERSION, PROFILE_RM_VERSION
+# shellcheck source=tools/onboard.versions
+source "$here/onboard.versions"
 
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 die() { printf '\n\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
