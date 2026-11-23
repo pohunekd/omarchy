@@ -464,6 +464,17 @@ Panel {
               wrapMode: Text.WordWrap
               elide: Text.ElideNone
             }
+            // The kept prompt, as plain text: prompts are untrusted.
+            Label {
+              objectName: "blockedPrompt"
+              Layout.fillWidth: true
+              text: pohunek.blockedStart ? Model.clip(pohunek.blockedStart.spec.prompt, 200) : ""
+              textFormat: Text.PlainText
+              color: root.dim
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+              maximumLineCount: 3
+            }
             Flow {
               Layout.fillWidth: true
               spacing: Style.space(8)
@@ -1240,7 +1251,7 @@ Panel {
           if (row.resumable) out.push({ label: root.t("action.resume"), run: function() { pohunek.resume(row); root.closeSheet(); root.close() } })
         } else out.push({ label: root.t("action.openTerminal"), run: function() { root.closeSheet(); root.attachRow(row) } })
         if (pohunek.hasHeldPrompt(row) && row.ownerState !== "ended")
-          out.push({ label: root.t("action.sendPrompt"), run: function() { pohunek.sendHeldPrompt(row); root.closeSheet() } })
+          out.push({ label: root.t("action.sendPrompt"), detail: Model.clip(pohunek.heldPrompt.text, 40), run: function() { pohunek.sendHeldPrompt(row); root.closeSheet() } })
         out.push({ label: root.t("action.details"), run: function() { root.showDetails(row) } })
         out.push({ label: root.t("action.rename"), run: function() { root.openSheet("rename", row) } })
         out.push({ label: root.t("action.newHere"), run: function() { root.newSessionFrom(row) } })

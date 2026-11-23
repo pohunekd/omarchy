@@ -435,6 +435,10 @@ Item {
     runAction(sessionNewArgv(spec, host, false), t("msg.started", "Session started"), "", function(ok) {
       var target = root.openCreated(ok, spec, host)
       if (target !== "") root.heldPrompt = { target: target, text: String(spec.prompt || "") }
+    }, function(err) {
+      // The offer and its prompt stay available when this start fails too (for example a branch the first try left behind).
+      root.blockedStart = pending
+      return false
     })
   }
   function dismissBlockedStart() { blockedStart = null }

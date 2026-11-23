@@ -308,6 +308,8 @@ ShellRoot {
       check("no offer without a failure", offer ? offer.visible : true, false)
       svc.blockedStart = { spec: { host: "local", agent: "claude", prompt: "fix the bug" } }
       check("blocked failure shows the offer", offer ? offer.visible : false, true)
+      var keptPrompt = findAll(offer, function(i) { try { return i.objectName === "blockedPrompt" } catch (e) { return false } })[0]
+      check("offer shows the retained prompt", keptPrompt ? keptPrompt.text : "", "fix the bug")
       svc.dismissBlockedStart()
       check("Dismiss hides the offer", offer ? offer.visible : true, false)
       svc.heldPrompt = { target: "s-held", text: "fix the bug" }
