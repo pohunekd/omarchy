@@ -484,6 +484,20 @@ exit 3
         self.assertIn("raise input.initial_startup_grace_ms", r.stderr)
         self.assertNotIn("waits on a dialog that needs an answer", r.stdout + r.stderr)
 
+    def test_a_pre_0_44_blocked_refusal_names_the_dialog_instead_of_the_grace(self):
+        """Cores before 0.44.0 refuse a blocked dialog with the startup-grace
+        text and keep no session to attach to; the tool has to name the dialog
+        and the upgrade, never the grace."""
+        r = self.run_tool(["--yes", *self.demo()], {"DEMO_POHUNEK_LAUNCH_NOT_READY": "blocked_old"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("waits on a dialog that needs an answer (last activity: blocked)", r.stderr)
+        self.assertIn(f"pohunek {VERSION} does not keep such a session", r.stderr)
+        self.assertIn("Pohunek 0.44.0 and newer keep it", r.stderr)
+        self.assertIn(" session screen <id>", r.stderr)
+        self.assertIn(" attach <id>", r.stderr)
+        self.assertNotIn("initial_startup_grace", r.stdout + r.stderr,
+                         "a dialog is answered, never waited out with a longer grace")
+
     @unittest.skipUnless(platform.system() == "Linux" and platform.machine() == "x86_64", "release archives are Linux x86_64")
     def test_a_fresh_machine_runs_setup_from_the_verified_archive(self):
         self.publish_core()

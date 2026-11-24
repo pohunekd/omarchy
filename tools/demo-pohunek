@@ -45,7 +45,9 @@ used by tests/onboard_test.py:
                           (pohunek 0.44.0): `initial_input: pending` and a
                           blocked/permission activity, an agent waiting on a dialog
   DEMO_POHUNEK_LAUNCH_NOT_READY  slow: `assistant setup` fails with the
-                          non-blocked `session_input_not_ready` message
+                          non-blocked `session_input_not_ready` message;
+                          blocked_old: the same refusal for a blocked dialog
+                          as cores before 0.44.0 word it (startup-grace hint)
 """
 import hashlib, json, os, re, shutil, sys, time
 
@@ -426,6 +428,12 @@ def cmd_assistant(intent, flags):
         # crates/daemon/src/session/mod.rs:5670-5680.
         fail("session_input_not_ready",
              "agent did not show an editable prompt within 5000 ms (last activity: working); nothing was sent, "
+             "raise input.initial_startup_grace_ms if the agent starts slowly", cls="runtime")
+    if os.environ.get("DEMO_POHUNEK_LAUNCH_NOT_READY") == "blocked_old":
+        # The blocked refusal of a core before 0.44.0, v0.43.1:crates/daemon/src/session/mod.rs:4831-4837:
+        # the startup-grace hint and a rolled-back session.
+        fail("session_input_not_ready",
+             "agent did not show an editable prompt within 5000 ms (last activity: blocked); nothing was sent, "
              "raise input.initial_startup_grace_ms if the agent starts slowly", cls="runtime")
     meta = {}
     for i, f in enumerate(flags):
