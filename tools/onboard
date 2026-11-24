@@ -43,6 +43,9 @@ RECORD_DIR="${HOME:-}/.local/state/omarchy"
 RECORD="$RECORD_DIR/pohunek-onboarding.json"
 AGENT_RE='^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
 COMMAND_RE='^[A-Za-z0-9._/~+-]{1,256}$'
+# The core's 0.44 wording of a refusal that names the dialog; the widget's
+# BLOCKED_INPUT_MARKER (Model.js) matches the same core text.
+BLOCKED_DIALOG_MARKER='waits on a dialog that needs an answer (last activity: blocked)'
 NAME_RE='[A-Za-z0-9][A-Za-z0-9._-]{0,63}'
 HOME_RE="^${NAME_RE}(:${NAME_RE})?\$"
 ID_RE='^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -652,6 +655,13 @@ blocked_grace_refusal() {
     and ((.err.msg // "") | contains("startup_grace"))' >/dev/null 2>&1 <<<"$1"
 }
 
+# A refusal that names the dialog itself (dialogs, below): core 0.44 keeps such
+# a session only for a Claude agent and removes it for every other runtime.
+blocked_dialog_refusal() {
+  jq -e --arg marker "$BLOCKED_DIALOG_MARKER" 'type == "object" and .err.code == "session_input_not_ready"
+    and ((.err.msg // "") | contains($marker))' >/dev/null 2>&1 <<<"$1"
+}
+
 # Writes the record, starts the onboard session and attaches to it.
 start_session() {
   local setup_result=$1 assistant=$2 hooks_json=$3 skills_json=$4 run_id started_at doc launch sid app_id grant_json launched_live=0
@@ -689,12 +699,15 @@ start_session() {
     "${agent_args[@]}") || rc=$?
   if (( rc != 0 )) || ! jq -e '.ok.session.id | type == "string"' >/dev/null 2>&1 <<<"$launch"; then
     jq -e 'type == "object"' >/dev/null 2>&1 <<<"$launch" || launch=null
+    local dialog_hint="The dialog is usually the agent CLI asking whether it may trust the folder it starts in, which it asks once per folder. Start the agent by hand in the assistant folder of pohunek's data directory (~/.local/share/pohunek/assistant by default) to answer it, then run onboarding again."
+    if blocked_dialog_refusal "$launch"; then
+      die "The onboard session did not start: the agent waits on a dialog that needs an answer (last activity: blocked), and pohunek $CORE_VERSION removed the session instead of keeping it.
+$dialog_hint"
+    fi
     if blocked_grace_refusal "$launch"; then
-      die "The onboard session did not start: the agent waits on a dialog that needs an answer (last activity: blocked), and pohunek $CORE_VERSION does not keep such a session.
-Pohunek $BLOCKED_KEPT_VERSION and newer keep it and hold the opening request until you answer: upgrade, run onboarding again, and answer the dialog it then names.
-  $COMMAND session screen <id>   shows the dialog without attaching
-  $COMMAND attach <id>   answers it in a terminal
-The dialog is usually the agent CLI asking whether it may trust the folder it starts in."
+      die "The onboard session did not start: the agent waits on a dialog that needs an answer (last activity: blocked), and pohunek $CORE_VERSION removed the session instead of keeping it.
+Pohunek $BLOCKED_KEPT_VERSION and newer keep such a session for a Claude agent and hold the request until you answer, so with a Claude agent upgrade pohunek and run onboarding again, then answer the dialog in the session it names ($COMMAND session screen <id>, $COMMAND attach <id>).
+$dialog_hint"
     fi
     die "The onboard session did not start: $(cli_error "$launch")"
   fi

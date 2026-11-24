@@ -339,7 +339,7 @@ IPC for your own bindings: `omarchy-shell pohunek.sessions toggle | newSession |
 | a host is missing | Hosts → **Set up network**; every machine must use the same overlay |
 | a host's rows are dimmed | it dropped off the network; its last rows stay until it is back |
 | an idle agent shows Working | it is idle for less than `idleThresholdSec`, or has subagents running |
-| the onboarding window says the session waits on a dialog | answer it in the terminal that opened, or later with `pohunek attach <id>` (`pohunek session screen <id>` shows it); the held request is sent once you do |
+| the onboarding window says the session waits on a dialog | answer it in the terminal that opened, or later with `pohunek attach <id>` (`pohunek session screen <id>` shows it); the held request is sent once you do. When pohunek removed the session (an agent it does not keep), start the agent once in `~/.local/share/pohunek/assistant` to answer the folder-trust question, then run onboarding again |
 
 ## Development
 

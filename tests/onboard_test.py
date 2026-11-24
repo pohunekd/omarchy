@@ -486,17 +486,29 @@ exit 3
 
     def test_a_pre_0_44_blocked_refusal_names_the_dialog_instead_of_the_grace(self):
         """Cores before 0.44.0 refuse a blocked dialog with the startup-grace
-        text and keep no session to attach to; the tool has to name the dialog
-        and the upgrade, never the grace."""
-        r = self.run_tool(["--yes", *self.demo()], {"DEMO_POHUNEK_LAUNCH_NOT_READY": "blocked_old"})
+        text and keep no session to attach to; the tool has to name the dialog,
+        the agents that get kept by the upgrade, and how to answer it."""
+        r = self.run_tool(["--yes", *self.demo()], {"DEMO_POHUNEK_LAUNCH_NOT_READY": "blocked_grace"})
         self.assertEqual(r.returncode, 1)
         self.assertIn("waits on a dialog that needs an answer (last activity: blocked)", r.stderr)
-        self.assertIn(f"pohunek {VERSION} does not keep such a session", r.stderr)
-        self.assertIn("Pohunek 0.44.0 and newer keep it", r.stderr)
-        self.assertIn(" session screen <id>", r.stderr)
-        self.assertIn(" attach <id>", r.stderr)
+        self.assertIn(f"pohunek {VERSION} removed the session instead of keeping it", r.stderr)
+        self.assertIn("Pohunek 0.44.0 and newer keep such a session for a Claude agent", r.stderr)
+        self.assertIn("Start the agent by hand in the assistant folder", r.stderr)
+        self.assertIn("then run onboarding again", r.stderr)
         self.assertNotIn("initial_startup_grace", r.stdout + r.stderr,
                          "a dialog is answered, never waited out with a longer grace")
+
+    def test_a_0_44_blocked_refusal_for_another_agent_skips_the_upgrade_advice(self):
+        """0.44.0 keeps a blocked session only for a Claude agent; codex and
+        hermes are removed, so the upgrade advice there would be false."""
+        r = self.run_tool(["--yes", *self.demo()], {"DEMO_POHUNEK_LAUNCH_NOT_READY": "blocked_kept"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("waits on a dialog that needs an answer (last activity: blocked)", r.stderr)
+        self.assertIn("removed the session instead of keeping it", r.stderr)
+        self.assertIn("Start the agent by hand in the assistant folder", r.stderr)
+        self.assertIn("then run onboarding again", r.stderr)
+        self.assertNotIn("and newer keep such a session", r.stderr, "no upgrade advice for a runtime 0.44.0 removes")
+        self.assertNotIn("initial_startup_grace", r.stdout + r.stderr)
 
     @unittest.skipUnless(platform.system() == "Linux" and platform.machine() == "x86_64", "release archives are Linux x86_64")
     def test_a_fresh_machine_runs_setup_from_the_verified_archive(self):

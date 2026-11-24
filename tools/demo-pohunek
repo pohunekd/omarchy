@@ -46,8 +46,9 @@ used by tests/onboard_test.py:
                           blocked/permission activity, an agent waiting on a dialog
   DEMO_POHUNEK_LAUNCH_NOT_READY  slow: `assistant setup` fails with the
                           non-blocked `session_input_not_ready` message;
-                          blocked_old: the same refusal for a blocked dialog
-                          as cores before 0.44.0 word it (startup-grace hint)
+                          blocked_grace: the blocked refusal of cores before
+                          0.44.0 with the startup-grace hint; blocked_kept:
+                          the 0.44.0 refusal for a runtime it does not keep
 """
 import hashlib, json, os, re, shutil, sys, time
 
@@ -429,12 +430,19 @@ def cmd_assistant(intent, flags):
         fail("session_input_not_ready",
              "agent did not show an editable prompt within 5000 ms (last activity: working); nothing was sent, "
              "raise input.initial_startup_grace_ms if the agent starts slowly", cls="runtime")
-    if os.environ.get("DEMO_POHUNEK_LAUNCH_NOT_READY") == "blocked_old":
+    if os.environ.get("DEMO_POHUNEK_LAUNCH_NOT_READY") == "blocked_grace":
         # The blocked refusal of a core before 0.44.0, v0.43.1:crates/daemon/src/session/mod.rs:4831-4837:
         # the startup-grace hint and a rolled-back session.
         fail("session_input_not_ready",
              "agent did not show an editable prompt within 5000 ms (last activity: blocked); nothing was sent, "
              "raise input.initial_startup_grace_ms if the agent starts slowly", cls="runtime")
+    if os.environ.get("DEMO_POHUNEK_LAUNCH_NOT_READY") == "blocked_kept":
+        # The 0.44.0 refusal for a runtime it does not keep (codex, hermes):
+        # blocked_readiness_error, crates/daemon/src/session/mod.rs:10767-10771.
+        fail("session_input_not_ready",
+             "the agent waits on a dialog that needs an answer (last activity: blocked); nothing was sent and the "
+             "session was not kept, start the session without --input, answer the agent's dialog in it "
+             "(`pohunek attach <session-id>`) and then send the input", cls="runtime")
     meta = {}
     for i, f in enumerate(flags):
         if f == "--meta" and i + 1 < len(flags) and "=" in flags[i + 1]:
