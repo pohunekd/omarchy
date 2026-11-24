@@ -41,6 +41,11 @@ used by tests/onboard_test.py:
                           (the user stayed attached until the agent exited)
   DEMO_POHUNEK_LAUNCH_FAILED  1: `assistant setup` starts the session already
                           `failed`, with `ended_at` set
+  DEMO_POHUNEK_LAUNCH_BLOCKED  1: `assistant setup` keeps the session instead
+                          (pohunek 0.44.0): `initial_input: pending` and a
+                          blocked/permission activity, an agent waiting on a dialog
+  DEMO_POHUNEK_LAUNCH_NOT_READY  slow: `assistant setup` fails with the
+                          non-blocked `session_input_not_ready` message
 """
 import hashlib, json, os, re, shutil, sys, time
 
@@ -416,6 +421,12 @@ def cmd_assistant(intent, flags):
     request = sys.stdin.read().strip() if "--request-stdin" in flags else ""
     if "--request-stdin" in flags and not request:
         usage("the request read from stdin is empty")
+    if os.environ.get("DEMO_POHUNEK_LAUNCH_NOT_READY") == "slow":
+        # The refusal of a strict readiness wait that is not blocked,
+        # crates/daemon/src/session/mod.rs:5670-5680.
+        fail("session_input_not_ready",
+             "agent did not show an editable prompt within 5000 ms (last activity: working); nothing was sent, "
+             "raise input.initial_startup_grace_ms if the agent starts slowly", cls="runtime")
     meta = {}
     for i, f in enumerate(flags):
         if f == "--meta" and i + 1 < len(flags) and "=" in flags[i + 1]:
@@ -426,6 +437,10 @@ def cmd_assistant(intent, flags):
     if os.environ.get("DEMO_POHUNEK_LAUNCH_FAILED") == "1":
         # SessionState::Failed, crates/protocol/src/session.rs:2753; ended_at :3422-3429.
         info.update({"state": "failed", "activity": None, "ended_at": rfc3339()})
+    if os.environ.get("DEMO_POHUNEK_LAUNCH_BLOCKED") == "1":
+        # A kept blocked create: `initial_input: pending` (crates/daemon/src/session/mod.rs:1429-1440)
+        # and AgentActivity::Blocked with BlockedKind::Permission (crates/protocol/src/session.rs:50-58).
+        info.update({"activity": "blocked", "blocked_kind": "permission", "initial_input": {"state": "pending"}})
     if STATE:
         save("sessions.json", load("sessions.json", []) + [info])
         save("request.txt", request)

@@ -636,6 +636,13 @@ ensure_assistant_works() {
   die "pohunek assistant cannot start: $(cli_error "$out")"
 }
 
+# Core 0.44 keeps a create whose agent waits on a dialog and holds the opening
+# prompt as `initial_input: pending`, so the session id alone hides the dialog.
+session_waits_on_dialog() {
+  jq -e '.ok.session.initial_input.state == "pending" or .ok.session.activity == "blocked"' \
+    >/dev/null 2>&1 <<<"$1"
+}
+
 # Writes the record, starts the onboard session and attaches to it.
 start_session() {
   local setup_result=$1 assistant=$2 hooks_json=$3 skills_json=$4 run_id started_at doc launch sid app_id grant_json launched_live=0
@@ -680,6 +687,17 @@ start_session() {
   [[ $sid =~ $ID_RE ]] || die "pohunek returned an unexpected session id."
   write_record "$(jq --arg sid "$sid" '. + {session_id: $sid}' <<<"$doc")"
   echo "Onboard session: $sid (Ctrl+] detaches; it keeps running)."
+  # The wording is the widget's (Model.js): the same core state on both surfaces.
+  if session_waits_on_dialog "$launch"; then
+    local blocked_kind
+    blocked_kind=$(jq -r '.ok.session.blocked_kind // empty' <<<"$launch")
+    say "The onboard session waits on a dialog that needs an answer (last activity: blocked${blocked_kind:+/$blocked_kind})"
+    echo "Nothing was lost: the opening request is held and sent once the agent is ready."
+    echo "It is usually the agent CLI asking whether you trust the folder it started in."
+    echo "Answer it in the terminal that opens, or later with:"
+    echo "  $COMMAND session screen $sid   shows the dialog without attaching"
+    echo "  $COMMAND attach $sid   answers it in a terminal"
+  fi
 
   # The app id the widget's Open uses, so it focuses this window.
   app_id="org.omarchy.pohunek.$(printf '%s' "$sid" | sed -E 's/[^A-Za-z0-9]+/-/g' | cut -c1-80)"
