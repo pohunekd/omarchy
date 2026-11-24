@@ -115,6 +115,14 @@ needs you. This widget puts all of it in the bar you already look at:
   a worker under it broke.
 - **🚀 New sessions without the CLI.** Pick a host, a project and an agent (with
   fuzzy search when the lists get long), write the first prompt, Ctrl+Enter.
+  When the agent sits on a dialog (for example a folder-trust question) pohunek
+  0.44 refuses the prompt and removes the new session; the panel keeps your
+  prompt and offers **Start without the prompt and open it**. Answer the dialog
+  in the terminal, then pick **Send saved prompt** in the session's actions.
+  Nothing is sent on its own.
+- **🧭 A Get started card that comes back.** If the onboard session was lost or
+  failed before it finished, the card returns with **Resume** and **Run
+  onboarding again**; **Not now** hides it.
 
 ## A tour
 

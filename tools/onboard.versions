@@ -1,0 +1,8 @@
+# Core versions tools/onboard requires. tools/onboard sources this file and the
+# panel reads AUTO_VERSION from it, so the number is stated once.
+# MIN_VERSION: setup --hooks, the assistant package step, profile digests.
+# AUTO_VERSION: the onboarding guide that Automatic mode's grant and floor follow.
+# PROFILE_RM_VERSION: plugin profile rm, which Undo onboarding uses.
+MIN_VERSION="0.42.0"
+AUTO_VERSION="0.43.0"
+PROFILE_RM_VERSION="0.43.0"

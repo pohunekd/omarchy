@@ -200,6 +200,16 @@
  "onboard.modeGuided": "Guided",
  "onboard.modeAutomatic": "Automatic",
  "onboard.modeGuidedText": "It is told to propose one change at a time and ask you first.",
- "onboard.modeAutomaticText": "It applies the items you grant in the terminal without asking, under a profile that allows only those plus what your own agent settings already allow (pohunek 0.43.0, Claude or Codex), and reports the rest.",
+ "onboard.modeAutomaticText": "It applies the items you grant in the terminal without asking, under a profile that allows only those plus what your own agent settings already allow (needs pohunek %1 or newer, Claude or Codex), and reports the rest.",
+ "onboard.modeAutomaticTextNoVersion": "It applies the items you grant in the terminal without asking, under a profile that allows only those plus what your own agent settings already allow (Claude or Codex), and reports the rest.",
+ "onboard.interrupted": "Onboarding was interrupted",
+ "onboard.interruptedText": "The onboard session ended before it finished. Resume it where it stopped, or run onboarding again.",
+ "onboard.resume": "Resume",
+ "onboard.runAgain": "Run onboarding again",
+ "new.blockedText": "The agent is waiting on a dialog, so the session was not kept and your prompt was not sent. Start the session without the prompt, answer the dialog in its terminal, then send the prompt from the session's actions.",
+ "new.blockedStart": "Start without the prompt and open it",
+ "new.blockedDismiss": "Dismiss",
+ "msg.promptSent": "Prompt sent",
+ "action.sendPrompt": "Send saved prompt",
  "msg.toolRefused": "%1 did not start: the plugin folder, the command setting or an argument holds characters a terminal command cannot carry"
 }

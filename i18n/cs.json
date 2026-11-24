@@ -210,6 +210,16 @@
  "onboard.modeGuided": "S dotazy",
  "onboard.modeAutomatic": "Automaticky",
  "onboard.modeGuidedText": "Má pokyn navrhovat jednu změnu po druhé a nejdřív se zeptat.",
- "onboard.modeAutomaticText": "Bez ptaní provede položky, které povolíš v terminálu, pod profilem, který dovolí jen je a to, co už dovolí tvoje vlastní nastavení agenta (pohunek 0.43.0, Claude nebo Codex), a zbytek nahlásí.",
+ "onboard.modeAutomaticText": "Bez ptaní provede položky, které povolíš v terminálu, pod profilem, který dovolí jen je a to, co už dovolí tvoje vlastní nastavení agenta (vyžaduje pohunek %1 nebo novější, Claude nebo Codex), a zbytek nahlásí.",
+ "onboard.modeAutomaticTextNoVersion": "Bez ptaní provede položky, které povolíš v terminálu, pod profilem, který dovolí jen je a to, co už dovolí tvoje vlastní nastavení agenta (Claude nebo Codex), a zbytek nahlásí.",
+ "onboard.interrupted": "Nastavení bylo přerušeno",
+ "onboard.interruptedText": "Relace průvodce skončila dřív, než se dokončila. Obnov ji tam, kde se zastavila, nebo spusť nastavení znovu.",
+ "onboard.resume": "Obnovit",
+ "onboard.runAgain": "Spustit nastavení znovu",
+ "new.blockedText": "Agent čeká na dialog, takže relace nebyla zachována a tvůj prompt se neodeslal. Spusť relaci bez promptu, odpověz na dialog v jejím terminálu a pak prompt pošli z akcí relace.",
+ "new.blockedStart": "Spustit bez promptu a otevřít",
+ "new.blockedDismiss": "Zavřít",
+ "msg.promptSent": "Prompt odeslán",
+ "action.sendPrompt": "Poslat uložený prompt",
  "msg.toolRefused": "%1 se nespustil: složka pluginu, nastavení command nebo argument obsahuje znaky, které příkaz v terminálu nepřenese"
 }

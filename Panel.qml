@@ -439,6 +439,61 @@ Panel {
           text: pohunek.banner
           tone: pohunek.bannerError ? root.urgent : root.foreground
         }
+        // The agent sat on a dialog, so core removed the new session and its prompt
+        // was never sent. The prompt is kept; nothing is retried without the user.
+        Rectangle {
+          id: blockedOffer
+          readonly property bool isBlockedOffer: true
+          Layout.fillWidth: true
+          visible: pohunek.blockedStart !== null
+          implicitHeight: blockedColumn.implicitHeight + Style.space(20)
+          radius: Style.cornerRadius
+          color: Qt.rgba(root.urgent.r, root.urgent.g, root.urgent.b, 0.10)
+          Layout.bottomMargin: Style.space(6)
+          ColumnLayout {
+            id: blockedColumn
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(10)
+            spacing: Style.space(6)
+            Label {
+              Layout.fillWidth: true
+              text: root.t("new.blockedText")
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+              elide: Text.ElideNone
+            }
+            // The kept prompt, as plain text: prompts are untrusted.
+            Label {
+              objectName: "blockedPrompt"
+              Layout.fillWidth: true
+              text: pohunek.blockedStart ? Model.clip(pohunek.blockedStart.spec.prompt, 200) : ""
+              textFormat: Text.PlainText
+              color: root.dim
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+              maximumLineCount: 3
+            }
+            Flow {
+              Layout.fillWidth: true
+              spacing: Style.space(8)
+              Button {
+                text: root.t("new.blockedStart")
+                bordered: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: { pohunek.startBlockedWithoutPrompt(); root.close() }
+              }
+              Button {
+                text: root.t("new.blockedDismiss")
+                foreground: Commons.Color.accent
+                fontFamily: root.fontFamily
+                onClicked: pohunek.dismissBlockedStart()
+              }
+            }
+          }
+        }
         Repeater {
           model: root.unreachableHosts
           Banner {
@@ -459,11 +514,14 @@ Panel {
           property string agent: ""
           property string mode: "guided"
           readonly property string pickedAgent: agents.indexOf(agent) >= 0 ? agent : (agents.length > 0 ? agents[0] : "")
+          readonly property string modeText: mode !== "automatic" ? root.t("onboard.modeGuidedText")
+            : pohunek.onboardAutoVersion !== "" ? root.t("onboard.modeAutomaticText").arg(pohunek.onboardAutoVersion)
+            : root.t("onboard.modeAutomaticTextNoVersion")
           Layout.fillWidth: true
           Layout.topMargin: Style.space(6)
           Layout.bottomMargin: Style.space(6)
           visible: pohunek.loaded && (cardState === "missing" || cardState === "running"
-                                      || (cardState === "ready" && pohunek.counts.state !== "offline"))
+                                      || ((cardState === "ready" || cardState === "interrupted") && pohunek.counts.state !== "offline"))
           implicitHeight: cardColumn.implicitHeight + Style.space(20)
           radius: Style.cornerRadius
           color: root.chipFill
@@ -480,13 +538,15 @@ Panel {
 
             Label {
               Layout.fillWidth: true
-              text: onboardCard.cardState === "running" ? root.t("onboard.running") : root.t("onboard.title")
+              text: onboardCard.cardState === "running" ? root.t("onboard.running")
+                  : onboardCard.cardState === "interrupted" ? root.t("onboard.interrupted") : root.t("onboard.title")
               font.weight: Font.DemiBold
             }
             Label {
               Layout.fillWidth: true
               visible: onboardCard.cardState !== "running"
-              text: onboardCard.cardState === "missing" ? root.t("onboard.missingText") : root.t("onboard.readyText")
+              text: onboardCard.cardState === "missing" ? root.t("onboard.missingText")
+                  : onboardCard.cardState === "interrupted" ? root.t("onboard.interruptedText") : root.t("onboard.readyText")
               color: root.dim
               font.pixelSize: Style.font.bodySmall
               wrapMode: Text.WordWrap
@@ -529,7 +589,7 @@ Panel {
             Label {
               Layout.fillWidth: true
               visible: onboardCard.cardState === "ready"
-              text: onboardCard.mode === "automatic" ? root.t("onboard.modeAutomaticText") : root.t("onboard.modeGuidedText")
+              text: onboardCard.modeText
               color: root.dim
               font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
@@ -558,6 +618,22 @@ Panel {
                 }
               }
               Button {
+                visible: onboardCard.cardState === "interrupted" && pohunek.onboarding.resumable === true
+                text: root.t("onboard.resume")
+                bordered: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: { pohunek.resume({ target: pohunek.onboarding.target }); root.close() }
+              }
+              Button {
+                visible: onboardCard.cardState === "interrupted"
+                text: root.t("onboard.runAgain")
+                bordered: onboardCard.cardState === "interrupted" && pohunek.onboarding.resumable !== true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: pohunek.onboardAgain()
+              }
+              Button {
                 visible: onboardCard.cardState === "running"
                 text: root.t("onboard.open")
                 bordered: true
@@ -573,7 +649,7 @@ Panel {
                 onClicked: { pohunek.openWeb("remove"); root.close() }
               }
               Button {
-                visible: onboardCard.cardState === "ready"
+                visible: onboardCard.cardState === "ready" || onboardCard.cardState === "interrupted"
                 text: root.t("onboard.notNow")
                 foreground: Commons.Color.accent
                 fontFamily: root.fontFamily
@@ -1174,6 +1250,8 @@ Panel {
         if (row.ownerState === "ended") {
           if (row.resumable) out.push({ label: root.t("action.resume"), run: function() { pohunek.resume(row); root.closeSheet(); root.close() } })
         } else out.push({ label: root.t("action.openTerminal"), run: function() { root.closeSheet(); root.attachRow(row) } })
+        if (pohunek.hasHeldPrompt(row) && row.ownerState !== "ended")
+          out.push({ label: root.t("action.sendPrompt"), detail: Model.clip(pohunek.heldPrompt.text, 40), run: function() { pohunek.sendHeldPrompt(row); root.closeSheet() } })
         out.push({ label: root.t("action.details"), run: function() { root.showDetails(row) } })
         out.push({ label: root.t("action.rename"), run: function() { root.openSheet("rename", row) } })
         out.push({ label: root.t("action.newHere"), run: function() { root.newSessionFrom(row) } })

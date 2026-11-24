@@ -66,6 +66,9 @@ Item {
   property bool onboardingRecordPresent: false   // a launched run, not undone: the card's done and Help's Undo
   property bool onboardingAgain: false   // Help → Run onboarding again, until the next start
   property var onboardAgents: []         // Model.onboardAgents of `host inspect local --json`
+  property string onboardAutoVersion: "" // core version Automatic mode needs, from tools/onboard.versions
+  property var blockedStart: null        // { spec }: a New session whose prompt hit a blocked dialog and was rolled back
+  property var heldPrompt: null          // { target, text }: the prompt of a session started without it
   readonly property var onboarding: Model.onboardingCard({
     installed: installed, recordPresent: onboardingRecordPresent, dismissed: !!layout.onboardingDismissed,
     again: onboardingAgain, rows: rows })
@@ -340,8 +343,9 @@ Item {
   }
 
   // Runs one CLI action with --json and reports its typed error, if any.
-  function runAction(argv, okMessage, stdinText, onOk) {
-    var proc = actionComponent.createObject(root, { okMessage: okMessage || "", stdinText: stdinText || "", onOk: onOk || null })
+  // onErr(err) may return true to say it handled the failure and no error banner is wanted.
+  function runAction(argv, okMessage, stdinText, onOk, onErr) {
+    var proc = actionComponent.createObject(root, { okMessage: okMessage || "", stdinText: stdinText || "", onOk: onOk || null, onErr: onErr || null })
     busyActions++
     proc.begin([root.command].concat(argv))
   }
@@ -381,27 +385,71 @@ Item {
       function() { root.attach(row) })
   }
 
-  // spec: { host, project, agent, name, branch, baseBranch, prompt, group }
-  function newSession(spec) {
-    var host = spec.host || "local"
-    if (host !== "local" && !Model.validHost(host)) return
-    if (!Model.validSessionId(spec.agent || "")) { say(t("msg.pickAgent", "Pick an agent"), true); return }
+  function sessionNewArgv(spec, host, withPrompt) {
     var argv = ["session", "new", "--host", host, "--agent", spec.agent, "--yes", "--json"]
     if (spec.project) argv.push("--project", spec.project)
     if (spec.name) argv.push("--name", String(spec.name).slice(0, 120))
     if (spec.branch) argv.push("--branch", String(spec.branch).slice(0, 200))
     if (spec.branch && spec.baseBranch) argv.push("--base-branch", String(spec.baseBranch).slice(0, 200))
+    if (withPrompt) argv.push("--input-stdin")
+    return argv
+  }
+
+  // Files the new session under its group and opens it; returns its target, "" when the result names no valid session.
+  function openCreated(ok, spec, host) {
+    var id = ok && ok.session && ok.session.id
+    if (!Model.validSessionId(id)) return ""
+    var created = { target: Model.validHost(host) && host !== "local" ? host + "/" + id : id }
+    if (spec.group && String(spec.group).toLowerCase() !== "inbox")
+      root.runAction(["session", "metadata", created.target, "--set", Model.GROUP_KEY + "=" + spec.group, "--json"], "")
+    root.attach(created)
+    return created.target
+  }
+
+  // spec: { host, project, agent, name, branch, baseBranch, prompt, group }
+  function newSession(spec) {
+    var host = spec.host || "local"
+    if (host !== "local" && !Model.validHost(host)) return
+    if (!Model.validSessionId(spec.agent || "")) { say(t("msg.pickAgent", "Pick an agent"), true); return }
     var prompt = String(spec.prompt || "")
-    if (prompt.trim() !== "") argv.push("--input-stdin")
+    var withPrompt = prompt.trim() !== ""
     if (spec.project) rememberProject(spec.project)
-    runAction(argv, t("msg.started", "Session started"), prompt.trim() !== "" ? prompt : "", function(ok) {
-      var id = ok && ok.session && ok.session.id
-      if (!Model.validSessionId(id)) return
-      var created = { target: Model.validHost(host) && host !== "local" ? host + "/" + id : id }
-      if (spec.group && String(spec.group).toLowerCase() !== "inbox")
-        root.runAction(["session", "metadata", created.target, "--set", Model.GROUP_KEY + "=" + spec.group, "--json"], "")
-      root.attach(created)
+    blockedStart = null
+    runAction(sessionNewArgv(spec, host, withPrompt), t("msg.started", "Session started"), withPrompt ? prompt : "",
+      function(ok) { root.openCreated(ok, spec, host) },
+      // A blocked dialog rolled the session back: offer to start it without the prompt, keep the prompt.
+      withPrompt ? function(err) {
+        if (Model.newSessionFailure(err) !== "blocked_dialog") return false
+        root.blockedStart = { spec: spec }
+        return true
+      } : null)
+  }
+
+  // Starts the session whose prompt hit a blocked dialog, without the prompt,
+  // opens it so the dialog can be answered, and holds the prompt for sendHeldPrompt.
+  function startBlockedWithoutPrompt() {
+    var pending = blockedStart
+    blockedStart = null
+    if (!pending) return
+    var spec = pending.spec, host = spec.host || "local"
+    runAction(sessionNewArgv(spec, host, false), t("msg.started", "Session started"), "", function(ok) {
+      var target = root.openCreated(ok, spec, host)
+      if (target !== "") root.heldPrompt = { target: target, text: String(spec.prompt || "") }
+    }, function(err) {
+      // The offer and its prompt stay available when this start fails too (for example a branch the first try left behind).
+      root.blockedStart = pending
+      return false
     })
+  }
+  function dismissBlockedStart() { blockedStart = null }
+
+  function hasHeldPrompt(row) { return !!row && !!heldPrompt && heldPrompt.target === row.target }
+
+  // Sends the held prompt once the user has answered the dialog; it stays held when the send fails.
+  function sendHeldPrompt(row) {
+    if (!hasHeldPrompt(row) || !Model.validTarget(row.target)) return
+    runAction(["session", "input", row.target, "--stdin", "--json"], t("msg.promptSent", "Prompt sent"), heldPrompt.text,
+      function() { root.heldPrompt = null })
   }
 
   function loadForm(host) {
@@ -470,6 +518,13 @@ Item {
     onLoadFailed: function(error) { root.onboardingRecordPresent = false }
   }
 
+  FileView {
+    path: root.pluginDir + "/tools/onboard.versions"
+    printErrors: false
+    onLoaded: root.onboardAutoVersion = Model.onboardRequirement(text())
+    onLoadFailed: function(error) { root.onboardAutoVersion = "" }
+  }
+
   // Exit and end-of-stream arrive in either order; apply once both have.
   component CliProcess: Process {
     id: proc
@@ -530,6 +585,7 @@ Item {
       id: action
       property string okMessage: ""
       property var onOk: null
+      property var onErr: null
       onFinished: function(out, code) {
         root.busyActions = Math.max(0, root.busyActions - 1)
         var doc = null
@@ -538,8 +594,8 @@ Item {
           if (action.okMessage) root.say(action.okMessage, false)
           if (typeof action.onOk === "function") action.onOk(doc.ok)
         } else {
-          var err = doc && doc.err ? (doc.err.msg || doc.err.code) : t("msg.failed", "Command failed (exit %1)").arg(code)
-          root.say(err, true)
+          var handled = typeof action.onErr === "function" && action.onErr(doc && doc.err) === true
+          if (!handled) root.say(doc && doc.err ? (doc.err.msg || doc.err.code) : t("msg.failed", "Command failed (exit %1)").arg(code), true)
         }
         root.refresh(false)
         action.destroy()
