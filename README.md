@@ -30,7 +30,10 @@ That is the whole install. No pohunek on the machine yet? The panel's
 verifies it, shows everything it will change, asks once, and then starts an
 onboard manager that walks you through your projects, groups, agent profiles
 and hooks, one proposal at a time, or in automatic mode applies the items you
-grant. **Undo onboarding** in Help reverses what it added.
+grant. **Undo onboarding** in Help reverses what it added. When the agent sits
+on a dialog before its first request, the tool names the dialog and where to
+answer it; the usual one is the agent CLI asking whether it may trust the
+folder it starts in.
 
 ## Requirements
 
@@ -337,6 +340,7 @@ IPC for your own bindings: `omarchy-shell pohunek.sessions toggle | newSession |
 | a host is missing | Hosts → **Set up network**; every machine must use the same overlay |
 | a host's rows are dimmed | it dropped off the network; its last rows stay until it is back |
 | an idle agent shows Working | it is idle for less than `idleThresholdSec`, or has subagents running |
+| the onboarding window says the session waits on a dialog | answer it in the terminal that opened, or later with `pohunek attach <id>` (`pohunek session screen <id>` shows it); the held request is sent once you do. When pohunek removed the session (an agent it does not keep), start the agent once in `~/.local/share/pohunek/assistant` to answer the folder-trust question, then run onboarding again |
 
 ## Development
 

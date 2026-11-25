@@ -43,6 +43,9 @@ RECORD_DIR="${HOME:-}/.local/state/omarchy"
 RECORD="$RECORD_DIR/pohunek-onboarding.json"
 AGENT_RE='^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
 COMMAND_RE='^[A-Za-z0-9._/~+-]{1,256}$'
+# The core's 0.44 wording of a refusal that names the dialog; the widget's
+# BLOCKED_INPUT_MARKER (Model.js) matches the same core text.
+BLOCKED_DIALOG_MARKER='waits on a dialog that needs an answer (last activity: blocked)'
 NAME_RE='[A-Za-z0-9][A-Za-z0-9._-]{0,63}'
 HOME_RE="^${NAME_RE}(:${NAME_RE})?\$"
 ID_RE='^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -659,6 +662,29 @@ ensure_assistant_works() {
   die "pohunek assistant cannot start: $(cli_error "$out")"
 }
 
+# Core 0.44 keeps a create whose agent waits on a dialog and holds the opening
+# prompt as `initial_input: pending`, so the session id alone hides the dialog.
+session_waits_on_dialog() {
+  jq -e '.ok.session.initial_input.state == "pending" or .ok.session.activity == "blocked"' \
+    >/dev/null 2>&1 <<<"$1"
+}
+
+# A refusal that names a blocked activity while suggesting the startup grace:
+# cores before 0.44 word it that way, keep no session, and the grace cannot
+# answer a dialog.
+blocked_grace_refusal() {
+  jq -e 'type == "object" and .err.code == "session_input_not_ready"
+    and ((.err.msg // "") | contains("(last activity: blocked)"))
+    and ((.err.msg // "") | contains("startup_grace"))' >/dev/null 2>&1 <<<"$1"
+}
+
+# A refusal that names the dialog itself (dialogs, below): core 0.44 keeps such
+# a session only for a Claude agent and removes it for every other runtime.
+blocked_dialog_refusal() {
+  jq -e --arg marker "$BLOCKED_DIALOG_MARKER" 'type == "object" and .err.code == "session_input_not_ready"
+    and ((.err.msg // "") | contains($marker))' >/dev/null 2>&1 <<<"$1"
+}
+
 # Writes the record, starts the onboard session and attaches to it.
 start_session() {
   local setup_result=$1 assistant=$2 hooks_json=$3 skills_json=$4 run_id started_at doc launch sid app_id grant_json launched_live=0
@@ -696,6 +722,16 @@ start_session() {
     "${agent_args[@]}") || rc=$?
   if (( rc != 0 )) || ! jq -e '.ok.session.id | type == "string"' >/dev/null 2>&1 <<<"$launch"; then
     jq -e 'type == "object"' >/dev/null 2>&1 <<<"$launch" || launch=null
+    local dialog_hint="The dialog is usually the agent CLI asking whether it may trust the folder it starts in, which it asks once per folder. Start the agent by hand in the assistant folder of pohunek's data directory (~/.local/share/pohunek/assistant by default) to answer it, then run onboarding again."
+    if blocked_dialog_refusal "$launch"; then
+      die "The onboard session did not start: the agent waits on a dialog that needs an answer (last activity: blocked), and pohunek $CORE_VERSION removed the session instead of keeping it.
+$dialog_hint"
+    fi
+    if blocked_grace_refusal "$launch"; then
+      die "The onboard session did not start: the agent waits on a dialog that needs an answer (last activity: blocked), and pohunek $CORE_VERSION removed the session instead of keeping it.
+Pohunek $BLOCKED_KEPT_VERSION and newer keep such a session for a Claude agent and hold the request until you answer, so with a Claude agent upgrade pohunek and run onboarding again, then answer the dialog in the session it names ($COMMAND session screen <id>, $COMMAND attach <id>).
+$dialog_hint"
+    fi
     die "The onboard session did not start: $(cli_error "$launch")"
   fi
   sid=$(jq -r '.ok.session.id' <<<"$launch")
@@ -703,6 +739,17 @@ start_session() {
   [[ $sid =~ $ID_RE ]] || die "pohunek returned an unexpected session id."
   write_record "$(jq --arg sid "$sid" '. + {session_id: $sid}' <<<"$doc")"
   echo "Onboard session: $sid (Ctrl+] detaches; it keeps running)."
+  # The wording is the widget's (Model.js): the same core state on both surfaces.
+  if session_waits_on_dialog "$launch"; then
+    local blocked_kind
+    blocked_kind=$(jq -r '.ok.session.blocked_kind // empty' <<<"$launch")
+    say "The onboard session waits on a dialog that needs an answer (last activity: blocked${blocked_kind:+/$blocked_kind})"
+    echo "Nothing was lost: the opening request is held and sent once the agent is ready."
+    echo "It is usually the agent CLI asking whether you trust the folder it started in."
+    echo "Answer it in the terminal that opens, or later with:"
+    echo "  $COMMAND session screen $sid   shows the dialog without attaching"
+    echo "  $COMMAND attach $sid   answers it in a terminal"
+  fi
 
   # The app id the widget's Open uses, so it focuses this window.
   app_id="org.omarchy.pohunek.$(printf '%s' "$sid" | sed -E 's/[^A-Za-z0-9]+/-/g' | cut -c1-80)"
