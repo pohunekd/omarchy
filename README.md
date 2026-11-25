@@ -293,7 +293,8 @@ IPC for your own bindings: `omarchy-shell pohunek.sessions toggle | newSession |
   turned off, and confirms them once with the rest. The session then runs under
   the `pohunek-onboard` profile that the tool writes for this run from the
   onboarding guide's table: under Claude, an allowlist of the read-only pohunek
-  commands plus the commands of the granted items, a deny list of the guide's
+  commands, read access to the knowledge bundle and the launch snapshot, and the
+  commands of the granted items (marking onboarding done always asks you), a deny list of the guide's
   floor, and the default permission mode, so the rest asks first; under
   Codex, which has no per-profile allowlist, pohunek commands ask for your
   approval. Your own permission settings still apply on top: a command that

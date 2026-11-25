@@ -10,6 +10,7 @@ import json
 import os
 import platform
 import pty
+import re
 import select
 import shutil
 import subprocess
@@ -40,7 +41,8 @@ CLAUDE_ALLOW = [
     "Bash(pohunek plugin doctor --json)", "Bash(pohunek plugin profile list --all --json)",
     "Bash(pohunek integration status --all-profiles --json)", "Bash(pohunek integration doctor --all-profiles --json)",
     "Bash(pohunek project list --json)", "Bash(pohunek session list --json)", "Bash(pohunek project candidates --json)",
-    'Bash(pohunek session metadata "$POHUNEK_SESSION_ID" --set onboard.state=done)']
+    # The bundle and snapshot paths of the demo's launch preview (Claude absolute-path syntax).
+    "Read(//demo/bundle/**)", "Read(//demo/runtime/assistant/**)"]
 HISTORY_ALLOW = "Bash(pohunek project candidates --sources pohunek --sources history --json)"
 _DENY_HEAD = [
     "Bash(sudo *)", "Bash(pohunek *--host*)", "Bash(pohunek setup *)", "Bash(pohunek service install *)",
@@ -55,6 +57,7 @@ _DENY_TAIL = [
     "Bash(pohunek project rm *)", "Bash(pohunek session rm *)", "Bash(pohunek session stop *)",
     "Bash(pohunek session retention sweep *--apply*)", "Bash(pohunek session metadata *--clear*)",
     "Bash(pohunek session metadata *--set*--set*)", "Bash(pohunek session metadata */*)",
+    'Bash(pohunek session metadata "" *)', "Bash(pohunek session metadata '' *)",
     "Read(~/.claude/projects/**)", "Read(~/.claude/.credentials.json)", "Read(~/.claude/history.jsonl)",
     "Read(~/.claude.json)", "Read(~/.codex/sessions/**)", "Read(~/.codex/history.jsonl)", "Read(~/.codex/auth.json)",
     "Read(~/.config/pohunek/agents/**)"]
@@ -788,6 +791,31 @@ exit 3
                 self.assertEqual(values[-2:], ["--permission-mode", "default"])
                 launch = self.find(["assistant", "setup"])[0]
                 self.assertIn("onboard.grant=" + ("" if grant == "none" else grant), launch)
+
+    def test_no_allow_rule_runs_a_state_change_with_an_empty_or_unexpanded_id(self):
+        def matches(rule, command):
+            body = rule[rule.index("(") + 1:-1] if rule.startswith("Bash(") else None
+            return body is not None and re.fullmatch(".*".join(map(re.escape, body.split("*"))), command) is not None
+
+        r = self.run_tool(["--launch-only", "--yes", "--mode", "automatic", "--agent", "claude",
+                           "--grant", "projects,groups,profiles,profile-hooks,cli-update", "--history", "yes",
+                           *self.demo()], self.auto_env())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        _, values = self.profile_create_args()
+        cut = values.index("--disallowedTools")
+        allow, deny = values[1:cut], values[cut + 1:-2]
+        for rule in allow:
+            self.assertNotIn("$", rule, "an allow rule never holds a literal variable")
+        empty = ['pohunek session metadata "" --set onboard.state=done',
+                 "pohunek session metadata '' --set onboard.state=done"]
+        unexpanded = ['pohunek session metadata "$POHUNEK_SESSION_ID" --set onboard.state=done',
+                      "pohunek session metadata $POHUNEK_SESSION_ID --set onboard.state=done"]
+        for command in empty + unexpanded:
+            with self.subTest(command=command):
+                self.assertFalse([rule for rule in allow if matches(rule, command)], "no allow rule runs it")
+        for command in empty:
+            with self.subTest(command=command):
+                self.assertTrue([rule for rule in deny if matches(rule, command)], "a deny rule refuses it")
 
     def test_codex_gets_the_guides_approval_profile(self):
         r = self.run_tool(["--launch-only", "--yes", "--mode", "automatic", "--grant", "projects", "--agent", "codex",

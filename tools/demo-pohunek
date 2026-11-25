@@ -418,7 +418,8 @@ def cmd_assistant(intent, flags):
     if "--print-prompt" in flags:
         # PrintPrompt, crates/cli/src/commands/assistant/mod.rs:217-237.
         env({"prompt": "(demo prompt)", "agent": agent, "agent_reason": "selected explicitly" if "--agent" in flags else
-             "highest-ranked available runtime (codex)", "intent": intent, "snapshot_path": "/demo/snapshot.json",
+             "highest-ranked available runtime (codex)", "intent": intent, "bundle_path": "/demo/bundle",
+             "snapshot_path": "/demo/runtime/assistant/launch-demo/snapshot.json",
              "knowledge_bundle_version": VERSION, "knowledge": "materialized"})
         return
     request = sys.stdin.read().strip() if "--request-stdin" in flags else ""

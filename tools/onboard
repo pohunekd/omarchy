@@ -317,7 +317,7 @@ write_record() {
 request_text() {
   local history=$1 mode=$2 text
   if [[ $mode == automatic ]]; then
-    text="Onboard this machine with me in automatic mode, following your onboarding guide. Apply without asking exactly the items whose grant id is in your session's onboard.grant metadata, and report every other change with its exact command instead of applying it. A new profile and new hook files still need my confirmation: ask me in this conversation before each, as the guide says. Never do anything on the guide's floor, whatever the grant."
+    text="Onboard this machine with me in automatic mode, following your onboarding guide. Apply without asking exactly the items whose grant id is in your session's onboard.grant metadata, and report every other change with its exact command instead of applying it. A new profile and new hook files still need my confirmation: ask me in this conversation before each, as the guide says. Never do anything on the guide's floor, whatever the grant. Read your knowledge base and the launch snapshot with your file-reading tools, not with shell commands."
   else
     text="Onboard this machine with me in guided mode. Look at what pohunek knows about this host: projects, sessions and their groups, agent profiles and hooks. Propose one change at a time: show the exact command, say what it does, and ask me in this conversation before you run it. A permission prompt of your agent CLI does not replace that question."
   fi
@@ -362,10 +362,12 @@ ask_grant() {
 # ------------------------------------------------- the pohunek-onboard profile
 # The launch profile of automatic mode, copied verbatim from the table
 # "Allowlist and floor" of docs/knowledge/guides/onboarding.md in pohunek
-# 0.43.0. The allow list holds the read-only rules, the rules of granted items
-# and the own onboard.state rule; the deny rules always apply.
-# The state rule keeps $POHUNEK_SESSION_ID unexpanded on purpose.
-# shellcheck disable=SC2016
+# 0.43.0. The allow list holds the read-only rules and the rules of granted
+# items; the deny rules always apply. There is no allow rule for
+# `session metadata <id> --set onboard.state=done`: a rule cannot bind the id of
+# a session that does not exist yet, and a rule holding the literal
+# "$POHUNEK_SESSION_ID" runs the command with an empty id when the variable is
+# unset. That one command asks the user.
 ALLOW_ALWAYS=(
   'Bash(pohunek --version)'
   'Bash(pohunek health --json)'
@@ -380,7 +382,6 @@ ALLOW_ALWAYS=(
   'Bash(pohunek project list --json)'
   'Bash(pohunek session list --json)'
   'Bash(pohunek project candidates --json)'
-  'Bash(pohunek session metadata "$POHUNEK_SESSION_ID" --set onboard.state=done)'
 )
 ALLOW_HISTORY='Bash(pohunek project candidates --sources pohunek --sources history --json)'
 DENY_NO_HISTORY='Bash(pohunek project candidates *history*)'
@@ -416,6 +417,8 @@ DENY_AFTER_HISTORY=(
   'Bash(pohunek session metadata *--clear*)'
   'Bash(pohunek session metadata *--set*--set*)'
   'Bash(pohunek session metadata */*)'
+  'Bash(pohunek session metadata "" *)'
+  "Bash(pohunek session metadata '' *)"
   'Read(~/.claude/projects/**)'
   'Read(~/.claude/.credentials.json)'
   'Read(~/.claude/history.jsonl)'
@@ -425,6 +428,13 @@ DENY_AFTER_HISTORY=(
   'Read(~/.codex/auth.json)'
   'Read(~/.config/pohunek/agents/**)'
 )
+
+# An absolute path a Claude permission rule can hold literally: no glob, group
+# or quote characters and no dot segments.
+safe_abs_path() {
+  [[ $1 == /* && $1 != / && $1 != *//* && $1 != *'/../'* && $1 != */.. && $1 != *'/./'* && $1 != */. ]] || return 1
+  [[ $1 =~ ^[A-Za-z0-9._/@+=,:-]+$ ]]
+}
 
 # Fills PROFILE_ARGS with the `--arg` pairs of the profile for base $1.
 build_profile_args() {
@@ -440,6 +450,15 @@ build_profile_args() {
     return
   fi
   allow=("${ALLOW_ALWAYS[@]}")
+  # The knowledge bundle and the launch snapshot are the read-only material of
+  # the onboard session; their paths come from the launch preview.
+  local root
+  if safe_abs_path "$PROMPT_BUNDLE"; then allow+=("Read(/$PROMPT_BUNDLE/**)"); fi
+  if safe_abs_path "$PROMPT_SNAPSHOT"; then
+    root=${PROMPT_SNAPSHOT%/*}
+    root=${root%/*}
+    if safe_abs_path "$root"; then allow+=("Read(/$root/**)"); fi
+  fi
   if [[ $HISTORY == yes ]]; then allow+=("$ALLOW_HISTORY"); fi
   if granted projects; then allow+=('Bash(pohunek project add *)'); fi
   if granted groups; then allow+=('Bash(pohunek session metadata * --set companion.group=*)'); fi
@@ -625,7 +644,11 @@ watch_session_end() {
 
 ensure_assistant_works() {
   local out
-  if run_cli out assistant help --print-prompt --json "${agent_args[@]}"; then return 0; fi
+  if run_cli out assistant help --print-prompt --json "${agent_args[@]}"; then
+    PROMPT_BUNDLE=$(jq -r '.ok.bundle_path // empty' <<<"$out")
+    PROMPT_SNAPSHOT=$(jq -r '.ok.snapshot_path // empty' <<<"$out")
+    return 0
+  fi
   if [[ $(jq -r '.err.code // empty' <<<"$out") == assistant_package_missing ]] && (( LAUNCH_ONLY && ! ASSUME_YES )); then
     echo "The assistant package is not installed, so the onboard session cannot start."
     if ask "Run the full setup now (it shows its changes and asks first)?"; then
@@ -752,6 +775,8 @@ SNAPSHOT=""
 AUTO_AGENT=""
 AUTO_BASE=""
 PROFILE_RECORD=""
+PROMPT_BUNDLE=""
+PROMPT_SNAPSHOT=""
 ONBOARD_DIGEST=""
 ONBOARD_READ=0
 history_question="Let the onboard manager propose projects from your agents' CLI history too? pohunek reads only the working directory and modification time of each history file, never its content."
