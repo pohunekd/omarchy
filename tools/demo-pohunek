@@ -27,7 +27,10 @@ used by tests/onboard_test.py:
   DEMO_POHUNEK_SERVICE    `install` plans a fresh service install until
                           `setup --yes` ran; otherwise the service is present
   DEMO_POHUNEK_RUNTIMES_AFTER_SETUP  1: `host inspect` lists no claude or codex
-                          runtime until `setup --yes` ran (needs DEMO_POHUNEK_STATE)
+                          runtime until `setup --yes` ran and the plan installs the
+                          claude package until then (needs DEMO_POHUNEK_STATE);
+                          never: the runtimes stay unlisted and the plan only
+                          reports the package as present
   DEMO_POHUNEK_NO_HOOKS   1: `setup` does not know `--hooks` (a core before 0.42)
   DEMO_POHUNEK_EXTRA_PROBLEM  1: `setup --yes` also fails a doctor check
   DEMO_POHUNEK_INSTALL_DIGEST  digest `plugin install|update` reports as
@@ -271,7 +274,8 @@ def preview(homes):
         "service": service,
         # PackageAction, crates/service-config/src/runtimes.rs:275-298.
         "packages": [{"runtime": "claude", "package": "pohunek.runtime.claude", "version": VERSION,
-                      "digest": "sha256:" + "cd" * 32, "status": "present" if service_installed() else "install",
+                      "digest": "sha256:" + "cd" * 32, "status": "install" if (not service_installed() or (
+                          os.environ.get("DEMO_POHUNEK_RUNTIMES_AFTER_SETUP") == "1" and not load("setup-ran", False))) else "present",
                       "reasons": ["detected"]}],
         "profiles": [],
         "integrations": [{"runtime": r, "profile": p} for r, p in homes],
@@ -876,9 +880,10 @@ def main():
         runtimes = [{"agent": a, "agent_base": a, "available": True,
                      **({"version": versions[a], "supported": True} if a != "shell" else {})}
                     for a in ("claude", "codex", "shell", "pi")
-                    if not (os.environ.get("DEMO_POHUNEK_RUNTIMES_AFTER_SETUP") == "1"
-                            and a in ("claude", "codex") and not load("setup-ran", False))]
-        runtimes +=[{"agent": x["name"], "agent_base": x["base"], "available": True,
+                    if not (a in ("claude", "codex") and (
+                        os.environ.get("DEMO_POHUNEK_RUNTIMES_AFTER_SETUP") == "never"
+                        or (os.environ.get("DEMO_POHUNEK_RUNTIMES_AFTER_SETUP") == "1" and not load("setup-ran", False))))]
+        runtimes += [{"agent": x["name"], "agent_base": x["base"], "available": True,
                       "version": versions[x["base"]], "supported": True} for x in profiles() if x["base"] in versions]
         env({"daemon_version": VERSION, "protocol_version": 5, "supported_agents": ["claude", "codex", "shell", "pi"],
              "runtimes": runtimes, "package_create_profile_supported": True,

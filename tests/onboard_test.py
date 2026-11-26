@@ -1021,6 +1021,21 @@ exit 3
         self.assertIn("pi is not an available Claude or Codex agent", r.stderr)
         self.assertEqual(self.writes(), [], "refused before setup")
 
+    def test_automatic_mode_refuses_a_claude_that_setup_would_not_install(self):
+        """The runtime package is present but the CLI is not usable: setup
+        would change nothing for it, so the run stops before the yes."""
+        auto = self.auto_env(DEMO_POHUNEK_RUNTIMES_AFTER_SETUP="never")
+        r = self.run_tool(["--yes", "--mode", "automatic", "--grant", "none", "--agent", "claude", *self.demo()], auto)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("neither available here nor installed by pohunek setup", r.stderr)
+        self.assertEqual(self.writes(), [], "refused before setup")
+
+    def test_automatic_preview_names_the_requested_base_before_setup(self):
+        auto = self.auto_env(DEMO_POHUNEK_RUNTIMES_AFTER_SETUP="1")
+        code, out, err = self.run_waiting(["--yes", "--mode", "automatic", "--grant", "none", "--agent", "claude", *self.demo()], auto)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("profile            pohunek-onboard, base claude", out)
+
     def test_a_replaced_onboard_profile_is_named(self):
         auto = self.auto_env()
         _, old = self.pohunek("plugin", "profile", "create", ONBOARD_PROFILE, "--base", "claude", "--json", extra=auto)
