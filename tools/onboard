@@ -1232,11 +1232,14 @@ choose_mode
 # A fresh machine has no daemon to ask until setup installed it, so only a bare
 # claude or codex (or none) can be checked before the yes.
 if [[ $MODE == automatic ]]; then
+  # The runtime is resolved after setup: the packages setup installs decide
+  # whether claude or codex is available, so only a bare claude or codex (or
+  # none) can be named before the yes.
   if (( ! fresh )); then
-    resolve_auto_base
     read_onboard_profile
-  elif [[ -n $AGENT && $AGENT != claude && $AGENT != codex ]]; then
-    die "Automatic mode on a machine without pohunek runs under claude or codex; $AGENT cannot be checked before pohunek is installed. Pick claude or codex, or start in guided mode. Nothing was changed."
+  fi
+  if [[ -n $AGENT && $AGENT != claude && $AGENT != codex ]]; then
+    die "Automatic mode runs under claude or codex; $AGENT cannot be checked before pohunek setup has run. Pick claude or codex, or start in guided mode. Nothing was changed."
   fi
 fi
 hooks_arg=none
@@ -1369,5 +1372,5 @@ if [[ $assistant_record == null && $assistant_status == gap ]]; then
   fi
 fi
 
-if [[ $MODE == automatic ]] && (( fresh )); then resolve_auto_base after_setup; fi
+if [[ $MODE == automatic ]]; then resolve_auto_base after_setup; fi
 start_session "$setup_out" "$assistant_record" "$hooks_json" "$skills_json"

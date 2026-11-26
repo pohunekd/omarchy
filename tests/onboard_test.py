@@ -883,7 +883,7 @@ exit 3
         absent = ["--command", str(self.root / "absent" / "pohunek")]
         r = self.run_tool(["--yes", "--mode", "automatic", "--grant", "none", "--agent", "work", *absent], fresh)
         self.assertEqual(r.returncode, 1)
-        self.assertIn("cannot be checked before pohunek is installed", r.stderr)
+        self.assertIn("cannot be checked before pohunek setup has run", r.stderr)
         self.assertEqual(self.writes(), [], "refused before setup")
         r = self.run_tool(["--yes", "--mode", "automatic", "--grant", "projects", *absent], fresh)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -1001,6 +1001,18 @@ exit 3
         self.assertEqual(len(self.find(["project", "rm"])), 1)
         self.assertIn("done in an earlier Undo attempt: hooks in claude", r.stdout)
         self.assertTrue(self.read_record()["undone_at"])
+
+    def test_automatic_mode_installs_the_runtime_packages_before_checking_the_agent(self):
+        """Regression: a host with a daemon but without the runtime packages
+        listed no claude, and automatic mode refused it before setup ran."""
+        auto = self.auto_env(DEMO_POHUNEK_RUNTIMES_AFTER_SETUP="1")
+        code, out, err = self.run_waiting(["--yes", "--mode", "automatic", "--grant", "none", "--agent", "claude", *self.demo()], auto)
+        self.assertEqual(code, 0, out + err)
+        argvs = self.argvs()
+        setup = next(i for i, a in enumerate(argvs) if a[:2] == ["setup", "--yes"])
+        create = next(i for i, a in enumerate(argvs) if a[:3] == ["plugin", "profile", "create"])
+        self.assertGreater(create, setup, "the profile is written once setup installed the runtimes")
+        self.assertEqual(argvs[create][5], "claude")
 
     def test_a_replaced_onboard_profile_is_named(self):
         auto = self.auto_env()
