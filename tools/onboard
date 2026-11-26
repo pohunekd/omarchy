@@ -479,6 +479,7 @@ build_profile_args() {
 # The base runtime of the agent that runs automatic mode, from
 # `host inspect local --json`: claude or codex, available and supported. An
 # empty AGENT takes the first of codex and claude, the assistant's own order.
+# With `try`, an unavailable agent returns 1 and sets nothing.
 resolve_auto_base() {
   local inspect pick outcome="Nothing was changed."
   if [[ ${1:-} == after_setup ]]; then
@@ -491,6 +492,7 @@ resolve_auto_base() {
     | if $agent != "" then ($ok | map(select(.agent == $agent)) | first)
       else ($ok | map(select(.agent == .base)) | sort_by(if .agent == "codex" then 0 else 1 end) | first) end
     | if . == null then "" else .agent + " " + .base end' <<<"$inspect")
+  if [[ -z $pick && ${1:-} == try ]]; then return 1; fi
   if [[ -z $pick ]]; then
     if [[ -n $AGENT ]]; then
       die "Automatic mode runs under Claude or Codex, and $AGENT is not an available Claude or Codex agent here. Start in guided mode, or pick claude or codex. $outcome"
@@ -1232,14 +1234,10 @@ choose_mode
 # A fresh machine has no daemon to ask until setup installed it, so only a bare
 # claude or codex (or none) can be checked before the yes.
 if [[ $MODE == automatic ]]; then
-  # The runtime is resolved after setup: the packages setup installs decide
-  # whether claude or codex is available, so only a bare claude or codex (or
-  # none) can be named before the yes.
   if (( ! fresh )); then
     read_onboard_profile
-  fi
-  if [[ -n $AGENT && $AGENT != claude && $AGENT != codex ]]; then
-    die "Automatic mode runs under claude or codex; $AGENT cannot be checked before pohunek setup has run. Pick claude or codex, or start in guided mode. Nothing was changed."
+  elif [[ -n $AGENT && $AGENT != claude && $AGENT != codex ]]; then
+    die "Automatic mode on a machine without pohunek runs under claude or codex; $AGENT cannot be checked before pohunek is installed. Pick claude or codex, or start in guided mode. Nothing was changed."
   fi
 fi
 hooks_arg=none
@@ -1248,6 +1246,18 @@ hooks_json=$(printf '%s\n' "${selected[@]}" | jq -R . | jq -s 'map(select(. != "
 
 # The preview of exactly this selection; it also refuses an unknown home.
 run_cli plan setup --dry-run --json --hooks "$hooks_arg" || die "pohunek setup cannot plan this machine: $(cli_error "$plan")"
+
+# Automatic mode refuses before the yes unless the agent is available now or the
+# plan installs its runtime package; setup then decides which agent runs.
+if [[ $MODE == automatic ]]; then
+  if (( fresh )) || ! resolve_auto_base try; then
+    if (( ! fresh )) && [[ -n $AGENT && $AGENT != claude && $AGENT != codex ]]; then
+      die "Automatic mode runs under Claude or Codex, and $AGENT is not an available Claude or Codex agent here. Start in guided mode, or pick claude or codex. Nothing was changed."
+    fi
+    jq -e --arg agent "$AGENT" '[.ok.packages[]? | .runtime | select(($agent == "" and (. == "claude" or . == "codex")) or . == $agent)] | length > 0' >/dev/null <<<"$plan" ||
+      die "Automatic mode runs under Claude or Codex, and ${AGENT:-neither of them} is neither available here nor installed by pohunek setup. Start in guided mode. Nothing was changed."
+  fi
+fi
 
 say "What this will do"
 if (( fresh )); then

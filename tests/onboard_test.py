@@ -883,7 +883,7 @@ exit 3
         absent = ["--command", str(self.root / "absent" / "pohunek")]
         r = self.run_tool(["--yes", "--mode", "automatic", "--grant", "none", "--agent", "work", *absent], fresh)
         self.assertEqual(r.returncode, 1)
-        self.assertIn("cannot be checked before pohunek setup has run", r.stderr)
+        self.assertIn("cannot be checked before pohunek is installed", r.stderr)
         self.assertEqual(self.writes(), [], "refused before setup")
         r = self.run_tool(["--yes", "--mode", "automatic", "--grant", "projects", *absent], fresh)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -1013,6 +1013,13 @@ exit 3
         create = next(i for i, a in enumerate(argvs) if a[:3] == ["plugin", "profile", "create"])
         self.assertGreater(create, setup, "the profile is written once setup installed the runtimes")
         self.assertEqual(argvs[create][5], "claude")
+
+    def test_automatic_mode_refuses_before_setup_an_agent_setup_does_not_install(self):
+        auto = self.auto_env(DEMO_POHUNEK_RUNTIMES_AFTER_SETUP="1")
+        r = self.run_tool(["--yes", "--mode", "automatic", "--grant", "none", "--agent", "pi", *self.demo()], auto)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("pi is not an available Claude or Codex agent", r.stderr)
+        self.assertEqual(self.writes(), [], "refused before setup")
 
     def test_a_replaced_onboard_profile_is_named(self):
         auto = self.auto_env()
